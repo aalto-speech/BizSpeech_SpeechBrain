@@ -4,10 +4,12 @@ Author:
 Anand C U
 """
 
+from hyperpyyaml import load_hyperpyyaml
 import speechbrain as sb
 import numpy as np
 import pathlib
 import json
+import sys
 
 
 def time_str_to_seconds(time_str):
@@ -54,7 +56,7 @@ class create_DataSet:
         if not included_events:
             included_events = list(self.bizspeech_metadata.keys())
         event_list = list(set(included_events) - set(excluded_events))
-        np.sort(event_list)
+        event_list = np.sort(event_list)
         np.random.seed(seed)
         np.random.shuffle(event_list)
         print("Picking data from ", len(event_list), " events.")
@@ -82,7 +84,7 @@ class create_DataSet:
                         self.bizspeech_metadata.keys())
                     event_list = list(
                         (set(included_events_whole) - set(excluded_events)) - set(included_events))
-                    np.sort(event_list)
+                    event_list = np.sort(event_list)
                     np.random.seed(seed)
                     np.random.shuffle(event_list)
                     progress_complete = self.dataset_compile_from_event_list(
@@ -255,3 +257,39 @@ def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd,
         datasetObj.parse_to_json(local_dataset_folder)
     else:
         datasetObj.parse_to_csv(local_dataset_folder)
+
+
+if __name__ == '__main__':
+    # Load hyper parameters file with command-line overrides
+    # Reading command line arguments
+    hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
+
+    with open(hparams_file) as fin:
+        hparams = load_hyperpyyaml(fin, overrides)
+
+    # Create experiment directory
+    sb.create_experiment_directory(
+        experiment_directory=hparams["output_folder"],
+        hyperparams_to_save=hparams_file,
+        overrides=overrides,
+    )
+
+    # Data preparation, to be run on only one process.
+
+    sb.utils.distributed.run_on_main(
+        prepare_bizspeech_speechbrain,
+        kwargs={
+            "local_dataset_folder": hparams["local_dataset_folder"],
+            "data_folder": hparams["data_folder"],
+            "hours_reqd": hparams["hours_reqd"],
+            "nonnative": hparams["nonnative"],
+            "qna": hparams["qna"],
+            "strict_included": hparams["strict_included"],
+            "non_CEO_utt": hparams["non_CEO_utt"],
+            "seed": hparams["seed"],
+            "trainValTest": hparams["trainValTest"],
+            "output_format": hparams["output_format"],
+            "include_event_json": hparams["include_event_json"],
+            "exclude_event_json": hparams["exclude_event_json"]
+        },
+    )

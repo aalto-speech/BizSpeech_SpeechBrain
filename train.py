@@ -49,7 +49,7 @@ import torch
 import logging
 import speechbrain as sb
 from hyperpyyaml import load_hyperpyyaml
-from bizspeech_prepare import prepare_bizspeech
+from bizspeech_prepare import prepare_bizspeech_speechbrain
 from speechbrain.utils.data_utils import download_file
 
 logger = logging.getLogger(__name__)
@@ -428,7 +428,7 @@ if __name__ == "__main__":
     # Data preparation, to be run on only one process.
 
     sb.utils.distributed.run_on_main(
-        prepare_bizspeech,
+        prepare_bizspeech_speechbrain,
         kwargs={
             "local_dataset_folder": hparams["local_dataset_folder"],
             "data_folder": hparams["data_folder"],
