@@ -242,7 +242,6 @@ def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd,
     """
     dest_dir = pathlib.Path(local_dataset_folder).resolve().parent
     dest_dir.mkdir(parents=True, exist_ok=True)
-    print(exclude_event_json, bool(exclude_event_json))
     if exclude_event_json:
         sb.utils.data_utils.download_file(
             exclude_event_json, local_dataset_folder + exclude_event_json)

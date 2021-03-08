@@ -441,7 +441,8 @@ if __name__ == "__main__":
             "trainValTest": hparams["trainValTest"],
             "output_format": hparams["output_format"],
             "include_event_json": hparams["include_event_json"],
-            "exclude_event_json": hparams["exclude_event_json"]
+            "exclude_event_json": hparams["exclude_event_json"],
+            "utterance_duration_limit": hparams["utterance_duration_limit"]
         },
     )
 
