@@ -21,6 +21,7 @@ nonnative: 0.5
 qna: 0.5
 non_CEO_utt: False
 strict_included: True
+utterance_duration_limit: 30
 trainValTest: (0.6, 0.2) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
 output_format: json # Other option being csv
 exclude_event_json: metadata/exclude_event_list.json # or use null to include all (may lead to errors)

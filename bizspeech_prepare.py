@@ -29,7 +29,7 @@ def time_str_to_seconds(time_str):
 class create_DataSet:
     """Class to create susets of Bizspeech dataset according to required native/nonnative speaker ratio, qna/presentation ratio."""
 
-    def __init__(self, dataPath, totalDuration, nonnative, qna, strict_included, non_CEO_utt, seed, trainValTest, included_events=[], excluded_events=[]):
+    def __init__(self, dataPath, totalDuration, nonnative, qna, strict_included, non_CEO_utt, seed, trainValTest, utterance_duration_limit, included_events=[], excluded_events=[]):
         """Init function.
 
         Args:
@@ -53,6 +53,7 @@ class create_DataSet:
         self.dataPath = dataPath
         self.non_CEO_utt = non_CEO_utt
         self.bizspeech_metadata = self.load_Bizspeech_metadata()
+        self.utterance_duration_limit = utterance_duration_limit
         if not included_events:
             included_events = list(self.bizspeech_metadata.keys())
         event_list = list(set(included_events) - set(excluded_events))
@@ -192,14 +193,16 @@ class create_DataSet:
                                                             1]["SentenceTimeGen"]
                             duration = int((time_str_to_seconds(utterance_end_time) - time_str_to_seconds(
                                 row["SentenceTimeGen"])) * 1000)
-                            self.dataset_dict[utterance_ID] = {
-                                "start": row["SentenceTimeGen"],
-                                "end": utterance_end_time,
-                                "spkID": row["SpeakerID"],
-                                "txt": row["Sentence"],
-                                "category": category_with_session
-                            }
-                            self.duration_dict_progress[category_with_session] += duration
+                            if int(duration / 1000) < self.utterance_duration_limit:
+                                self.dataset_dict[utterance_ID] = {
+                                    "start": row["SentenceTimeGen"],
+                                    "end": utterance_end_time,
+                                    "duration": duration,
+                                    "spkID": row["SpeakerID"],
+                                    "txt": row["Sentence"],
+                                    "category": category_with_session
+                                }
+                                self.duration_dict_progress[category_with_session] += duration
                         except TypeError:
                             print(event, sentence_ID)
             if i % 100 == 0:
@@ -217,11 +220,11 @@ class create_DataSet:
         return progress_complete
 
 
-def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd, nonnative=0.5, qna=0.5, strict_included=False, non_CEO_utt=False, seed=0, trainValTest=[0.6, 0.2], output_format="json", exclude_event_json=None, include_event_json=None):
+def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd, nonnative=0.5, qna=0.5, strict_included=False, non_CEO_utt=False, seed=0, trainValTest=[0.6, 0.2], output_format="json", exclude_event_json=None, include_event_json=None, utterance_duration_limit=30):
     """Entrypoint for speechbrain function that uses a method directly as a parameter.
 
     Args:
-    -----
+    ----
         - local_dataset_folder: Folder to store the dataset files train, val and test JSONs
         - data_folder : Location of the dataset
         - hours_reqd: total duration required for the subset. Used to calculate the sub totals according to ratios
@@ -234,6 +237,7 @@ def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd,
         - output_format: Specify the output format. json/csv
         - included_events: Specify the eventIDs to choose from first before moving on to other data
         - excluded_events: Specify the eventIDs to exlude when creating subset. Might include invalid data, etc.
+        - utterance_duration_limit: Specify the upper limit of utterance length in seconds to ignore
 
     """
     dest_dir = pathlib.Path(local_dataset_folder).resolve().parent
@@ -252,7 +256,7 @@ def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd,
             include_list = [item for sublist in list(
                 json.load(fh).values()) for item in sublist]
     datasetObj = create_DataSet(data_folder, hours_reqd, nonnative, qna, strict_included, non_CEO_utt,
-                                seed, trainValTest, included_events=include_list, excluded_events=exclude_list)
+                                seed, trainValTest, included_events=include_list, excluded_events=exclude_list, utterance_duration_limit=utterance_duration_limit)
     if output_format == "json":
         datasetObj.parse_to_json(local_dataset_folder)
     else:
@@ -290,6 +294,7 @@ if __name__ == '__main__':
             "trainValTest": hparams["trainValTest"],
             "output_format": hparams["output_format"],
             "include_event_json": hparams["include_event_json"],
-            "exclude_event_json": hparams["exclude_event_json"]
+            "exclude_event_json": hparams["exclude_event_json"],
+            "utterance_duration_limit": hparams["utterance_duration_limit"]
         },
     )
