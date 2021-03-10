@@ -8,8 +8,11 @@ from hyperpyyaml import load_hyperpyyaml
 import speechbrain as sb
 import numpy as np
 import pathlib
+import logging
 import json
 import sys
+
+logger = logging.getLogger(__name__)
 
 
 def time_str_to_seconds(time_str):
@@ -29,7 +32,7 @@ def time_str_to_seconds(time_str):
 class create_DataSet:
     """Class to create susets of Bizspeech dataset according to required native/nonnative speaker ratio, qna/presentation ratio."""
 
-    def __init__(self, dataPath, totalDuration, nonnative, qna, strict_included, non_CEO_utt, seed, trainValTest, utterance_duration_limit, included_events=[], excluded_events=[]):
+    def __init__(self, dataPath, totalDuration, nonnative, qna, strict_included, non_CEO_utt, seed, trainValTest, utterance_duration_limit, audio_filetype, included_events=[], excluded_events=[]):
         """Init function.
 
         Args:
@@ -46,7 +49,7 @@ class create_DataSet:
 
         """
         if non_CEO_utt:
-            print("Native/ Non Native Criteria is not well defined for Non CEOs. The criteria ratios may not be accurate with this enabled")
+            logger.info("Native/ Non Native Criteria is not well defined for Non CEOs. The criteria ratios may not be accurate with this enabled")
         self.non_CEO_utt = non_CEO_utt
         self.dataset_dict = {}
         self.split_dicts = {"train": {}, "val": {}, "test": {}}
@@ -54,13 +57,14 @@ class create_DataSet:
         self.non_CEO_utt = non_CEO_utt
         self.bizspeech_metadata = self.load_Bizspeech_metadata()
         self.utterance_duration_limit = utterance_duration_limit
+        self.audio_filetype = audio_filetype
         if not included_events:
             included_events = list(self.bizspeech_metadata.keys())
         event_list = list(set(included_events) - set(excluded_events))
         event_list = np.sort(event_list)
         np.random.seed(seed)
         np.random.shuffle(event_list)
-        print("Picking data from ", len(event_list), " events.")
+        logger.info(f"Picking data from {len(event_list)} events.")
         totalDuration = totalDuration * 60 * 60 * 1000
         self.duration_dict_limit = {
             "nativepresentation": totalDuration * (1 - nonnative) * (1 - qna),
@@ -77,9 +81,9 @@ class create_DataSet:
         if not progress_complete:
             if included_events:
                 if strict_included:
-                    print("Not all the categories were completed with the given criteria. Try freeing up the parameters and split ratios or reduce the number of hours of data.")
+                    logger.info("Not all the categories were completed with the given criteria. Try freeing up the parameters and split ratios or reduce the number of hours of data.")
                 else:
-                    print(
+                    logger.info(
                         "Using events from superset apart from included events to complete the required dataset.")
                     included_events_whole = list(
                         self.bizspeech_metadata.keys())
@@ -91,10 +95,10 @@ class create_DataSet:
                     progress_complete = self.dataset_compile_from_event_list(
                         event_list)
                     if not progress_complete:
-                        print(
+                        logger.info(
                             "Superset was insufficient for the given data split ratios and number of hours. Try reducing them to get the required data split.")
             else:
-                print("Not all the categories were completed with the given criteria. Try freeing up the parameters and split ratios or reduce the number of hours of data.")
+                logger.info("Not all the categories were completed with the given criteria. Try freeing up the parameters and split ratios or reduce the number of hours of data.")
 
         utterance_list = list(self.dataset_dict.keys())
         idxes_list = np.split(utterance_list, [int(trainValTest[0] * len(utterance_list)), int(
@@ -181,30 +185,31 @@ class create_DataSet:
             ceo = event_metadata["ceoID"]
             transcript = np.genfromtxt(
                 self.dataPath + event + "/transcript_timealigned.txt", names=True, dtype=None, delimiter="\t", encoding='utf-8')
-            # print(transcript)
             for i, row in enumerate(transcript[:-1]):
                 if row["SpeakerID"] == ceo or self.non_CEO_utt:
                     category_with_session = category + row["Session"]
                     if self.duration_dict_progress[category_with_session] < self.duration_dict_limit[category_with_session]:
                         sentence_ID = row["SentenceID"]
-                        try:
-                            utterance_ID = event + "-" + sentence_ID
-                            utterance_end_time = transcript[i +
-                                                            1]["SentenceTimeGen"]
-                            duration = int((time_str_to_seconds(utterance_end_time) - time_str_to_seconds(
-                                row["SentenceTimeGen"])) * 1000)
-                            if int(duration / 1000) < self.utterance_duration_limit:
-                                self.dataset_dict[utterance_ID] = {
-                                    "start": row["SentenceTimeGen"],
-                                    "end": utterance_end_time,
-                                    "duration": duration,
-                                    "spkID": row["SpeakerID"],
-                                    "txt": row["Sentence"],
-                                    "category": category_with_session
-                                }
-                                self.duration_dict_progress[category_with_session] += duration
-                        except TypeError:
-                            print(event, sentence_ID)
+                        utterance_ID = event + "-" + sentence_ID
+                        utterance_end_time = transcript[i +
+                                                        1]["SentenceTimeGen"]
+                        end_time_in_secs = time_str_to_seconds(
+                            utterance_end_time)
+                        start_time_in_secs = time_str_to_seconds(
+                            row["SentenceTimeGen"])
+                        duration = int(
+                            (end_time_in_secs - start_time_in_secs) * 1000)
+                        if int(duration / 1000) < self.utterance_duration_limit:
+                            self.dataset_dict[utterance_ID] = {
+                                "audio": self.dataPath + event + "/recording." + self.audio_filetype,
+                                "start": row["SentenceTimeGen"],
+                                "end": utterance_end_time,
+                                "duration": duration,
+                                "spkID": row["SpeakerID"],
+                                "txt": row["Sentence"],
+                                "category": category_with_session
+                            }
+                            self.duration_dict_progress[category_with_session] += duration
             if i % 100 == 0:
                 print("Dataset Creation Progress")
                 progress_complete = True
@@ -214,13 +219,13 @@ class create_DataSet:
                     print(k, progress)
                     progress_complete *= progress > 100
                 if progress_complete:
-                    print(i)
+                    logger.info(f"Finished compiling dataset from {i} events.")
                     break
 
         return progress_complete
 
 
-def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd, nonnative=0.5, qna=0.5, strict_included=False, non_CEO_utt=False, seed=0, trainValTest=[0.6, 0.2], output_format="json", exclude_event_json=None, include_event_json=None, utterance_duration_limit=30):
+def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd, nonnative=0.5, qna=0.5, strict_included=False, non_CEO_utt=False, seed=0, trainValTest=[0.6, 0.2], output_format="json", exclude_event_json=None, include_event_json=None, utterance_duration_limit=30, audio_filetype="mp3"):
     """Entrypoint for speechbrain function that uses a method directly as a parameter.
 
     Args:
@@ -240,24 +245,30 @@ def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd,
         - utterance_duration_limit: Specify the upper limit of utterance length in seconds to ignore
 
     """
+    training_file = pathlib.Path(local_dataset_folder + "train.json")
+    if training_file.is_file():
+        logger.info(f"{training_file} exists. Skipping dataset preparation.")
+        return
     dest_dir = pathlib.Path(local_dataset_folder).resolve().parent
     dest_dir.mkdir(parents=True, exist_ok=True)
+
     if exclude_event_json:
         sb.utils.data_utils.download_file(
-            exclude_event_json, local_dataset_folder + exclude_event_json)
-        with open(local_dataset_folder + exclude_event_json) as fh:
+            exclude_event_json, local_dataset_folder + "exclude_list.json")
+        with open(local_dataset_folder + "exclude_list.json") as fh:
             exclude_list = [item for sublist in list(
                 json.load(fh).values()) for item in sublist]
     if include_event_json:
         sb.utils.data_utils.download_file(
-            include_event_json, local_dataset_folder + include_event_json)
-        with open(local_dataset_folder + include_event_json) as fh:
+            include_event_json, local_dataset_folder + "include_list.json")
+        with open(local_dataset_folder + "include_list.json") as fh:
             include_list = [item for sublist in list(
                 json.load(fh).values()) for item in sublist]
-    datasetObj = create_DataSet(data_folder, hours_reqd, nonnative, qna, strict_included, non_CEO_utt,
-                                seed, trainValTest, included_events=include_list, excluded_events=exclude_list, utterance_duration_limit=utterance_duration_limit)
+    datasetObj = create_DataSet(data_folder, hours_reqd, nonnative, qna, strict_included, non_CEO_utt, seed, trainValTest,
+                                utterance_duration_limit, audio_filetype, included_events=include_list, excluded_events=exclude_list, )
     if output_format == "json":
         datasetObj.parse_to_json(local_dataset_folder)
+        logger.info(f"Created JSON dataset files under {local_dataset_folder} directory.")
     else:
         datasetObj.parse_to_csv(local_dataset_folder)
 
@@ -294,6 +305,7 @@ if __name__ == '__main__':
             "output_format": hparams["output_format"],
             "include_event_json": hparams["include_event_json"],
             "exclude_event_json": hparams["exclude_event_json"],
-            "utterance_duration_limit": hparams["utterance_duration_limit"]
+            "utterance_duration_limit": hparams["utterance_duration_limit"],
+            "audio_filetype": hparams["audio_filetype"]
         },
     )

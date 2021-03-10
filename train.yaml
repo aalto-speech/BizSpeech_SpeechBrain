@@ -21,7 +21,8 @@ nonnative: 0.5
 qna: 0.5
 non_CEO_utt: False
 strict_included: True
-utterance_duration_limit: 30
+utterance_duration_limit: 20
+audio_filetype: wav
 trainValTest: (0.6, 0.2) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
 output_format: json # Other option being csv
 exclude_event_json: metadata/exclude_event_list.json # or use null to include all (may lead to errors)
@@ -37,13 +38,13 @@ train_log: !ref <output_folder>/train_log.txt
 # for LM training. By default, the code in train.py uses the tokenizer defined in the lm_model
 # object. In this case, it is based on 1000 tokens.
 tokenizer_file: https://www.dropbox.com/s/o7gnouwdoqchotj/1000_unigram.model?dl=1
-lm_hparam_file: https://www.dropbox.com/s/j51op5l7i356s3v/pretrained_RNNLM_BPE1000.yaml?dl=1
-pretrain_model: https://www.dropbox.com/s/t2es1c9k4q8dvs2/pretrained.ckpt?dl=1
+#lm_hparam_file: https://www.dropbox.com/s/j51op5l7i356s3v/pretrained_RNNLM_BPE1000.yaml?dl=1
+#pretrain_model: https://www.dropbox.com/s/t2es1c9k4q8dvs2/pretrained.ckpt?dl=1
 
 # Path where data manifest files will be stored
-train_annotation: datasets/dataset.json
-valid_annotation: datasets/dataset.json
-test_annotation: datasets/dataset.json
+train_annotation: !ref <local_dataset_folder>/train.json
+valid_annotation: !ref <local_dataset_folder>/val.json
+test_annotation: !ref <local_dataset_folder>/test.json
 
 # The train logger writes training statistics to a file, as well as stdout.
 train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
@@ -52,7 +53,7 @@ train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
 # Training parameters
 number_of_epochs: 15
 number_of_ctc_epochs: 5
-batch_size: 8
+batch_size: 4
 lr: 1.0
 ctc_weight: 0.5
 sorting: ascending
@@ -72,6 +73,7 @@ test_dataloader_opts:
 
 # Feature parameters
 sample_rate: 16000
+num_channels: 1
 n_fft: 400
 n_mels: 40
 
@@ -202,9 +204,9 @@ ctc_cost: !name:speechbrain.nnet.losses.ctc_loss
     blank_index: !ref <blank_index>
 
 # Cost definition for the seq2seq part.
-lm_model: !new:recipes.LibriSpeech.LM.pretrained.pretrained.LM
-    hparams_file: !ref <lm_hparam_file>
-    save_folder: !ref <save_folder>
+#lm_model: !new:recipes.LibriSpeech.LM.pretrained.pretrained.LM
+#    hparams_file: !ref <lm_hparam_file>
+#    save_folder: !ref <save_folder>
 
 # Tokenizer object (we here assume it is already trained, see ../Tokenizer)
 # NB: To avoid mismatch, the speech recognizer must be trained with the same
@@ -261,26 +263,26 @@ valid_search: !new:speechbrain.decoders.S2SRNNBeamSearcher
 # The final decoding on the test set can be more computationally demanding.
 # In this case, we use the LM + CTC probabilities during decoding as well.
 # Please, remove this part if you need a faster decoder.
-test_search: !new:speechbrain.decoders.S2SRNNBeamSearchLM
-    embedding: !ref <embedding>
-    decoder: !ref <decoder>
-    linear: !ref <seq_lin>
-    ctc_linear: !ref <ctc_lin>
-    language_model: !ref <lm_model>
-    bos_index: !ref <bos_index>
-    eos_index: !ref <eos_index>
-    blank_index: !ref <blank_index>
-    min_decode_ratio: !ref <min_decode_ratio>
-    max_decode_ratio: !ref <max_decode_ratio>
-    beam_size: !ref <test_beam_size>
-    eos_threshold: !ref <eos_threshold>
-    using_max_attn_shift: !ref <using_max_attn_shift>
-    max_attn_shift: !ref <max_attn_shift>
-    coverage_penalty: !ref <coverage_penalty>
-    lm_weight: !ref <lm_weight>
-    ctc_weight: !ref <ctc_weight_decode>
-    temperature: !ref <temperature>
-    temperature_lm: !ref <temperature_lm>
+#test_search: !new:speechbrain.decoders.S2SRNNBeamSearchLM
+#    embedding: !ref <embedding>
+#    decoder: !ref <decoder>
+#    linear: !ref <seq_lin>
+#    ctc_linear: !ref <ctc_lin>
+#    language_model: !ref <lm_model>
+#    bos_index: !ref <bos_index>
+#    eos_index: !ref <eos_index>
+#    blank_index: !ref <blank_index>
+#    min_decode_ratio: !ref <min_decode_ratio>
+#    max_decode_ratio: !ref <max_decode_ratio>
+#    beam_size: !ref <test_beam_size>
+#    eos_threshold: !ref <eos_threshold>
+#    using_max_attn_shift: !ref <using_max_attn_shift>
+#    max_attn_shift: !ref <max_attn_shift>
+#    coverage_penalty: !ref <coverage_penalty>
+#    lm_weight: !ref <lm_weight>
+#    ctc_weight: !ref <ctc_weight_decode>
+#    temperature: !ref <temperature>
+#    temperature_lm: !ref <temperature_lm>
 
 # This function manages learning rate annealing over the epochs.
 # We here use the NewBoB algorithm, that anneals the learning rate if

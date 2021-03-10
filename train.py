@@ -47,6 +47,7 @@ import os
 import sys
 import torch
 import logging
+import torchaudio
 import speechbrain as sb
 from hyperpyyaml import load_hyperpyyaml
 from bizspeech_prepare import prepare_bizspeech_speechbrain
@@ -313,27 +314,58 @@ def dataio_prepare(hparams):
         Dictionary containing "train", "valid", and "test" keys that correspond
         to the DynamicItemDataset objects.
     """
+    def time_str_to_seconds(time_str):
+        """
+        Return time format in string to secods for easy airthmetic operations.
+
+        Args : time_str : str with format hh:mm:ss
+        """
+        time_str = str(time_str)
+        millisecs = 0
+        if "." in time_str:
+            time_str, millisecs = time_str.split(".")
+        return int(time_str.split(":")[
+            0]) * 3600 + int(time_str.split(":")[1]) * 60 + int(time_str.split(":")[2]) + float(millisecs) / 1000
+
     # Define audio pipeline. In this case, we simply read the path contained
     # in the variable wav with the audio reader.
-    @sb.utils.data_pipeline.takes("wav")
+    @sb.utils.data_pipeline.takes("audio", "start", "end")
     @sb.utils.data_pipeline.provides("sig")
-    def audio_pipeline(wav):
+    def audio_pipeline(audio, start, end):
         """Load the audio signal. This is done on the CPU in the `collate_fn`."""
-        sig = sb.dataio.dataio.read_audio(wav)
+        effects = []
+        if isinstance(start, str):
+            metadata = torchaudio.info(audio)
+            if metadata.sample_rate != hparams["sample_rate"]:
+                effects.append(['rate', str(hparams["sample_rate"])])
+            if metadata.num_channels != hparams["num_channels"]:
+                effects.append(['channels', str(hparams["num_channels"])])
+            start = int(time_str_to_seconds(start) * metadata.sample_rate)
+            end = int(time_str_to_seconds(end) * metadata.sample_rate)
+        num_frames = end - start
+        audio, fs = torchaudio.load(
+            audio, num_frames=num_frames, frame_offset=start)
+        if len(effects) > 0:
+            audio, fs = torchaudio.sox_effects.apply_effects_tensor(audio, fs, effects)
+        audio = audio.transpose(0, 1)
+        sig = audio.squeeze(1)
         return sig
+        # sig = sb.dataio.dataio.read_audio(
+        #    {"file": audio, "start": start, "stop": end})
+        # return sig
 
     # Define text processing pipeline. We start from the raw text and then
     # encode it using the tokenizer. The tokens with BOS are used for feeding
     # decoder during training, the tokens with EOS for computing the cost function.
     # The tokens without BOS or EOS is for computing CTC loss.
-    @sb.utils.data_pipeline.takes("words")
+    @sb.utils.data_pipeline.takes("txt")
     @sb.utils.data_pipeline.provides(
         "words", "tokens_list", "tokens_bos", "tokens_eos", "tokens"
     )
-    def text_pipeline(words):
-        """Processes the transcriptions to generate proper labels"""
-        yield words
-        tokens_list = hparams["tokenizer"].spm.encode_as_ids(words)
+    def text_pipeline(txt):
+        """Processes the transcriptions to generate proper labels."""
+        yield txt
+        tokens_list = hparams["tokenizer"].spm.encode_as_ids(txt)
         yield tokens_list
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
         yield tokens_bos
@@ -367,7 +399,7 @@ def dataio_prepare(hparams):
     # does not harm the performance.
     if hparams["sorting"] == "ascending":
         datasets["train"] = datasets["train"].filtered_sorted(
-            sort_key="length")
+            sort_key="duration")
         hparams["train_dataloader_opts"]["shuffle"] = False
 
     elif hparams["sorting"] == "descending":
@@ -442,7 +474,8 @@ if __name__ == "__main__":
             "output_format": hparams["output_format"],
             "include_event_json": hparams["include_event_json"],
             "exclude_event_json": hparams["exclude_event_json"],
-            "utterance_duration_limit": hparams["utterance_duration_limit"]
+            "utterance_duration_limit": hparams["utterance_duration_limit"],
+            "audio_filetype": hparams["audio_filetype"]
         },
     )
 
@@ -452,7 +485,7 @@ if __name__ == "__main__":
     # In this case, pre-training is essential because mini-librispeech is not
     # big enough to train an end-to-end model from scratch. With bigger dataset
     # you can train from scratch and avoid this step.
-    load_pretrained(hparams)
+    # load_pretrained(hparams)
 
     # Trainer initialization
     asr_brain = ASR(
