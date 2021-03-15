@@ -1,6 +1,7 @@
 *.csv
 *.json
 *.xlsx
+*.out
 runs
 metadata/durations.py
 __pycache__

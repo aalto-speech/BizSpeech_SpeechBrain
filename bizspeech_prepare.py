@@ -126,11 +126,11 @@ class create_DataSet:
             - filepath : Location for the output JSONs.
 
         """
-        with open(filepath + "train.json", "w") as fh:
+        with open(filepath + "/train.json", "w") as fh:
             json.dump(self.split_dicts["train"], fh)
-        with open(filepath + "val.json", "w") as fh:
+        with open(filepath + "/val.json", "w") as fh:
             json.dump(self.split_dicts["val"], fh)
-        with open(filepath + "test.json", "w") as fh:
+        with open(filepath + "/test.json", "w") as fh:
             json.dump(self.split_dicts["test"], fh)
 
     def parse_to_csv(self, filepath):
@@ -149,7 +149,7 @@ class create_DataSet:
             new_dict = {"utterance_ID": k}
             new_dict.update(self.dataset_dict[k])
             items.append(new_dict)
-        pd.DataFrame(items).to_csv(filepath + "train.csv", index=False, columns=[
+        pd.DataFrame(items).to_csv(filepath + "/train.csv", index=False, columns=[
             "utterance_ID", "category", "start", "end", "spkID", "txt"])
 
         items = []
@@ -157,7 +157,7 @@ class create_DataSet:
             new_dict = {"utterance_ID": k}
             new_dict.update(self.dataset_dict[k])
             items.append(new_dict)
-        pd.DataFrame(items).to_csv(filepath + "val.csv", index=False, columns=[
+        pd.DataFrame(items).to_csv(filepath + "/val.csv", index=False, columns=[
             "utterance_ID", "category", "start", "end", "spkID", "txt"])
 
         items = []
@@ -165,7 +165,7 @@ class create_DataSet:
             new_dict = {"utterance_ID": k}
             new_dict.update(self.dataset_dict[k])
             items.append(new_dict)
-        pd.DataFrame(items).to_csv(filepath + "test.csv", index=False, columns=[
+        pd.DataFrame(items).to_csv(filepath + "/test.csv", index=False, columns=[
             "utterance_ID", "category", "start", "end", "spkID", "txt"])
 
     def dataset_compile_from_event_list(self, event_list):
@@ -184,7 +184,7 @@ class create_DataSet:
                 category = "nonnative"
             ceo = event_metadata["ceoID"]
             transcript = np.genfromtxt(
-                self.dataPath + event + "/transcript_timealigned.txt", names=True, dtype=None, delimiter="\t", encoding='utf-8')
+                self.dataPath + "/" + event + "/transcript_timealigned.txt", names=True, dtype=None, delimiter="\t", encoding='utf-8')
             for i, row in enumerate(transcript[:-1]):
                 if row["SpeakerID"] == ceo or self.non_CEO_utt:
                     category_with_session = category + row["Session"]
@@ -201,7 +201,7 @@ class create_DataSet:
                             (end_time_in_secs - start_time_in_secs) * 1000)
                         if int(duration / 1000) < self.utterance_duration_limit:
                             self.dataset_dict[utterance_ID] = {
-                                "audio": self.dataPath + event + "/recording." + self.audio_filetype,
+                                "audio": self.dataPath + "/" + event + "/recording." + self.audio_filetype,
                                 "start": row["SentenceTimeGen"],
                                 "end": utterance_end_time,
                                 "duration": duration,
@@ -245,7 +245,7 @@ def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd,
         - utterance_duration_limit: Specify the upper limit of utterance length in seconds to ignore
 
     """
-    training_file = pathlib.Path(local_dataset_folder + "train.json")
+    training_file = pathlib.Path(local_dataset_folder + "/train.json")
     if training_file.is_file():
         logger.info(f"{training_file} exists. Skipping dataset preparation.")
         return
@@ -254,14 +254,14 @@ def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd,
 
     if exclude_event_json:
         sb.utils.data_utils.download_file(
-            exclude_event_json, local_dataset_folder + "exclude_list.json")
-        with open(local_dataset_folder + "exclude_list.json") as fh:
+            exclude_event_json, local_dataset_folder + "/exclude_list.json")
+        with open(local_dataset_folder + "/exclude_list.json") as fh:
             exclude_list = [item for sublist in list(
                 json.load(fh).values()) for item in sublist]
     if include_event_json:
         sb.utils.data_utils.download_file(
-            include_event_json, local_dataset_folder + "include_list.json")
-        with open(local_dataset_folder + "include_list.json") as fh:
+            include_event_json, local_dataset_folder + "/include_list.json")
+        with open(local_dataset_folder + "/include_list.json") as fh:
             include_list = [item for sublist in list(
                 json.load(fh).values()) for item in sublist]
     datasetObj = create_DataSet(data_folder, hours_reqd, nonnative, qna, strict_included, non_CEO_utt, seed, trainValTest,

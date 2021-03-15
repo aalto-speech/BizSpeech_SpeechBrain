@@ -20,13 +20,13 @@ Git Repository for using speechbrain on the Bizspeech data
 
     5 hours of presentation and 5 hours of qna for each of these 10 hours
 
-- [ ]  Data Preprocessing (to use for training)
+- [x]  Data Preprocessing (to use for training)
 
     Try to choose data without noise. Add exlusion list from Google Azure results which have very high WER (>100%)
 
     Split to reasonably short utterances (~ 1 sentence each). Important for attention models.
 
-- [ ]  Speechbrain Compatible Data Loading
+- [x]  Speechbrain Compatible Data Loading
 
     Newest method uses JSON
 

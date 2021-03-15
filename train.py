@@ -46,12 +46,14 @@ Authors
 import os
 import sys
 import torch
+import shutil
 import logging
+import pathlib
 import torchaudio
 import speechbrain as sb
 from hyperpyyaml import load_hyperpyyaml
-from bizspeech_prepare import prepare_bizspeech_speechbrain
 from speechbrain.utils.data_utils import download_file
+from bizspeech_prepare import prepare_bizspeech_speechbrain
 
 logger = logging.getLogger(__name__)
 
@@ -333,20 +335,36 @@ def dataio_prepare(hparams):
     @sb.utils.data_pipeline.provides("sig")
     def audio_pipeline(audio, start, end):
         """Load the audio signal. This is done on the CPU in the `collate_fn`."""
-        effects = []
+        # effects = []
+        if hparams["copy_to_local"]:
+            event_id = str(pathlib.Path(audio).resolve().parent).split("/")[-1]
+            dest_dir = pathlib.Path(hparams["local_dest_dir"]).resolve().joinpath(event_id)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_dir = dest_dir.joinpath("recording." + hparams["dataset"]["audio_filetype"])
+            if not dest_dir.is_file():
+                audio = shutil.copy(audio, dest_dir)
+        resample_reqd = False
+        mono_conversion = False
         if isinstance(start, str):
             metadata = torchaudio.info(audio)
             if metadata.sample_rate != hparams["sample_rate"]:
-                effects.append(['rate', str(hparams["sample_rate"])])
+                resample_reqd = True
+                # effects.append(['rate', str(hparams["sample_rate"])])
             if metadata.num_channels != hparams["num_channels"]:
-                effects.append(['channels', str(hparams["num_channels"])])
+                mono_conversion = True
+                # effects.append(['channels', str(hparams["num_channels"])])
             start = int(time_str_to_seconds(start) * metadata.sample_rate)
             end = int(time_str_to_seconds(end) * metadata.sample_rate)
         num_frames = end - start
         audio, fs = torchaudio.load(
             audio, num_frames=num_frames, frame_offset=start)
-        if len(effects) > 0:
-            audio, fs = torchaudio.sox_effects.apply_effects_tensor(audio, fs, effects)
+        # if len(effects) > 0:
+        #   audio, fs = torchaudio.sox_effects.apply_effects_tensor(audio, fs, effects)
+        if resample_reqd:
+            audio = torchaudio.transforms.Resample(orig_freq=metadata.sample_rate, new_freq=hparams["sample_rate"]).forward(audio)
+        if mono_conversion:
+            audio = torch.mean(audio, dim=0).unsqueeze(0)
+
         audio = audio.transpose(0, 1)
         sig = audio.squeeze(1)
         return sig
@@ -377,10 +395,10 @@ def dataio_prepare(hparams):
     # Define datasets from json data manifest file
     # Define datasets sorted by ascending lengths for efficiency
     datasets = {}
-    data_folder = hparams["data_folder"]
+    data_folder = hparams["dataset"]["data_folder"]
     for dataset in ["train", "valid", "test"]:
         datasets[dataset] = sb.dataio.dataset.DynamicItemDataset.from_json(
-            json_path=hparams[f"{dataset}_annotation"],
+            json_path=hparams["dataset"][f"{dataset}_annotation"],
             replacements={"data_root": data_folder},
             dynamic_items=[audio_pipeline, text_pipeline],
             output_keys=[
@@ -452,30 +470,29 @@ if __name__ == "__main__":
 
     # Create experiment directory
     sb.create_experiment_directory(
-        experiment_directory=hparams["output_folder"],
+        experiment_directory=hparams["dataset"]["output_folder"],
         hyperparams_to_save=hparams_file,
         overrides=overrides,
     )
 
     # Data preparation, to be run on only one process.
-
     sb.utils.distributed.run_on_main(
         prepare_bizspeech_speechbrain,
         kwargs={
-            "local_dataset_folder": hparams["local_dataset_folder"],
-            "data_folder": hparams["data_folder"],
-            "hours_reqd": hparams["hours_reqd"],
-            "nonnative": hparams["nonnative"],
-            "qna": hparams["qna"],
-            "strict_included": hparams["strict_included"],
-            "non_CEO_utt": hparams["non_CEO_utt"],
-            "seed": hparams["seed"],
-            "trainValTest": hparams["trainValTest"],
-            "output_format": hparams["output_format"],
-            "include_event_json": hparams["include_event_json"],
-            "exclude_event_json": hparams["exclude_event_json"],
-            "utterance_duration_limit": hparams["utterance_duration_limit"],
-            "audio_filetype": hparams["audio_filetype"]
+            "local_dataset_folder": hparams["dataset"]["local_dataset_folder"],
+            "data_folder": hparams["dataset"]["data_folder"],
+            "hours_reqd": hparams["dataset"]["hours_reqd"],
+            "nonnative": hparams["dataset"]["nonnative"],
+            "qna": hparams["dataset"]["qna"],
+            "strict_included": hparams["dataset"]["strict_included"],
+            "non_CEO_utt": hparams["dataset"]["non_CEO_utt"],
+            "seed": hparams["dataset"]["seed"],
+            "trainValTest": hparams["dataset"]["trainValTest"],
+            "output_format": hparams["dataset"]["output_format"],
+            "include_event_json": hparams["dataset"]["include_event_json"],
+            "exclude_event_json": hparams["dataset"]["exclude_event_json"],
+            "utterance_duration_limit": hparams["dataset"]["utterance_duration_limit"],
+            "audio_filetype": hparams["dataset"]["audio_filetype"]
         },
     )
 

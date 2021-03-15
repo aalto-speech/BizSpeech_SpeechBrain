@@ -1,59 +1,31 @@
-# ############################################################################
-# Model: E2E ASR with attention-based ASR
-# Encoder: CRDNN
-# Decoder: GRU + beamsearch + RNNLM
-# Tokens: 1000 BPE
-# losses: CTC+ NLL
-# Training: mini-librispeech
-# Pre-Training: librispeech 960h
-# Authors:  Ju-Chieh Chou, Mirco Ravanelli, Abdel Heba, Peter Plantinga, Samuele Cornell 2020
-# # ############################################################################
+dataset: !include:dataset.yaml
+tokenizer_params: !include:tokenizer.yaml
 
-# Seed needs to be set at top of yaml, before objects with parameters are instantiated
-seed: 2602
-__set_seed: !apply:torch.manual_seed [!ref <seed>]
+copy_to_local: True
+local_dest_dir: /tmp/data_dir
 
+# Tokenizer parameters
+token_type: bpe  # ["unigram", "bpe", "char"]
+token_output: 1000  # index(blank/eos/bos/unk) = 0
+character_coverage: 1.0
+annotation_read: txt # field to read
 
-# Set up folders for reading from and writing to
-data_folder: /m/triton/scratch/biz/bizspeech/MEDIA/ # data folder of BizSpeech
-hours_reqd: 20
-nonnative: 0.5
-qna: 0.5
-non_CEO_utt: False
-strict_included: True
-utterance_duration_limit: 20
-audio_filetype: wav
-trainValTest: (0.6, 0.2) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
-output_format: json # Other option being csv
-exclude_event_json: metadata/exclude_event_list.json # or use null to include all (may lead to errors)
-include_event_json: metadata/cloudasr_testset_lists.json # or use null to include all
-output_folder: !ref runs/<seed>
-local_dataset_folder: !ref <output_folder>/datasets/ # data folder of BizSpeech
-wer_file: !ref <output_folder>/wer.txt
-save_folder: !ref <output_folder>/save
-train_log: !ref <output_folder>/train_log.txt
-
-# Language model (LM) parameter file
-# NB: To avoid mismatch, the speech recognizer must be trained with the same tokenizer used
-# for LM training. By default, the code in train.py uses the tokenizer defined in the lm_model
-# object. In this case, it is based on 1000 tokens.
-tokenizer_file: https://www.dropbox.com/s/o7gnouwdoqchotj/1000_unigram.model?dl=1
-#lm_hparam_file: https://www.dropbox.com/s/j51op5l7i356s3v/pretrained_RNNLM_BPE1000.yaml?dl=1
-#pretrain_model: https://www.dropbox.com/s/t2es1c9k4q8dvs2/pretrained.ckpt?dl=1
-
-# Path where data manifest files will be stored
-train_annotation: !ref <local_dataset_folder>/train.json
-valid_annotation: !ref <local_dataset_folder>/val.json
-test_annotation: !ref <local_dataset_folder>/test.json
+tokenizer_file: !ref <dataset[save_folder]>/<tokenizer_params[token_output]>_<tokenizer_params[token_type]>.model
+# Tokenizer object (we here assume it is already trained, see ../Tokenizer)
+# NB: To avoid mismatch, the speech recognizer must be trained with the same
+# tokenizer used for LM training.
+tokenizer: !new:templates.speech_recognition.Tokenizer.pretrained.tokenizer
+    tokenizer_file: !ref <tokenizer_file>
+    save_folder: !ref <dataset[save_folder]>
 
 # The train logger writes training statistics to a file, as well as stdout.
 train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
-    save_file: !ref <train_log>
+    save_file: !ref <dataset[train_log]>
 
 # Training parameters
 number_of_epochs: 15
 number_of_ctc_epochs: 5
-batch_size: 4
+batch_size: 16
 lr: 1.0
 ctc_weight: 0.5
 sorting: ascending
@@ -63,10 +35,9 @@ label_smoothing: 0.1
 # Dataloader options
 train_dataloader_opts:
     batch_size: !ref <batch_size>
-
+    num_workers: 8
 valid_dataloader_opts:
     batch_size: !ref <batch_size>
-
 test_dataloader_opts:
     batch_size: !ref <batch_size>
 
@@ -208,12 +179,7 @@ ctc_cost: !name:speechbrain.nnet.losses.ctc_loss
 #    hparams_file: !ref <lm_hparam_file>
 #    save_folder: !ref <save_folder>
 
-# Tokenizer object (we here assume it is already trained, see ../Tokenizer)
-# NB: To avoid mismatch, the speech recognizer must be trained with the same
-# tokenizer used for LM training.
-tokenizer: !new:templates.speech_recognition.Tokenizer.pretrained.tokenizer
-    tokenizer_file: !ref <tokenizer_file>
-    save_folder: !ref <save_folder>
+
 
 # Objects in "modules" dict will have their parameters moved to the correct
 # device, as well as having train()/eval() called on them by the Brain class
@@ -311,7 +277,7 @@ cer_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
 # can be resumed if it gets interrupted, and also so that the best checkpoint
 # can be later loaded for evaluation or inference.
 checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
-    checkpoints_dir: !ref <save_folder>
+    checkpoints_dir: !ref <dataset[save_folder]>
     recoverables:
         model: !ref <model>
         scheduler: !ref <lr_annealing>
