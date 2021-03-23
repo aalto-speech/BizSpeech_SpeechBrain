@@ -43,8 +43,8 @@ Authors
  * Samuele Cornell 2020
 """
 
-import os
 import sys
+import time
 import torch
 import shutil
 import logging
@@ -52,7 +52,6 @@ import pathlib
 import torchaudio
 import speechbrain as sb
 from hyperpyyaml import load_hyperpyyaml
-from speechbrain.utils.data_utils import download_file
 from bizspeech_prepare import prepare_bizspeech_speechbrain
 
 logger = logging.getLogger(__name__)
@@ -78,221 +77,151 @@ class ASR(sb.Brain):
             If needed it also returns the ctc output log probabilities.
             At validation/test time, it returns the predicted tokens as well.
         """
-        # We first move the batch to the appropriate device.
         batch = batch.to(self.device)
-        feats, self.feat_lens = self.prepare_features(stage, batch.sig)
-        tokens_bos, _ = self.prepare_tokens(stage, batch.tokens_bos)
+        wavs, wav_lens = batch.sig
+        tokens_bos, _ = batch.tokens_bos
+        wavs, wav_lens = wavs.to(self.device), wav_lens.to(self.device)
 
-        # Running the encoder (prevent propagation to feature extraction)
-        encoded_signal = self.modules.encoder(feats.detach())
-
-        # Embed tokens and pass tokens & encoded signal to decoder
-        embedded_tokens = self.modules.embedding(tokens_bos)
-        decoder_outputs, _ = self.modules.decoder(
-            embedded_tokens, encoded_signal, self.feat_lens
-        )
-
-        # Output layer for seq2seq log-probabilities
-        logits = self.modules.seq_lin(decoder_outputs)
-        predictions = {"seq_logprobs": self.hparams.log_softmax(logits)}
-
-        if self.is_ctc_active(stage):
-            # Output layer for ctc log-probabilities
-            ctc_logits = self.modules.ctc_lin(encoded_signal)
-            predictions["ctc_logprobs"] = self.hparams.log_softmax(ctc_logits)
-        elif stage == sb.Stage.VALID:
-            predictions["tokens"], _ = self.hparams.valid_search(
-                encoded_signal, self.feat_lens
-            )
-        elif stage == sb.Stage.TEST:
-            predictions["tokens"], _ = self.hparams.test_search(
-                encoded_signal, self.feat_lens
-            )
-
-        return predictions
-
-    def is_ctc_active(self, stage):
-        """Check if CTC is currently active.
-
-        Arguments
-        ---------
-        stage : sb.Stage
-            Currently executing stage.
-        """
-        if stage != sb.Stage.TRAIN:
-            return False
-        current_epoch = self.hparams.epoch_counter.current
-        return current_epoch <= self.hparams.number_of_ctc_epochs
-
-    def prepare_features(self, stage, wavs):
-        """Prepare features for computation on-the-fly
-
-        Arguments
-        ---------
-        stage : sb.Stage
-            Currently executing stage.
-        wavs : tuple
-            The input signals (tensor) and their lengths (tensor).
-        """
-        wavs, wav_lens = wavs
-
-        # Add augmentation if specified. In this version of augmentation, we
-        # concatenate the original and the augment batches in a single bigger
-        # batch. This is more memory-demanding, but helps to improve the
-        # performance. Change it if you run OOM.
+        # Add augmentation if specified
         if stage == sb.Stage.TRAIN:
             if hasattr(self.modules, "env_corrupt"):
                 wavs_noise = self.modules.env_corrupt(wavs, wav_lens)
                 wavs = torch.cat([wavs, wavs_noise], dim=0)
                 wav_lens = torch.cat([wav_lens, wav_lens])
+                tokens_bos = torch.cat([tokens_bos, tokens_bos], dim=0)
 
             if hasattr(self.hparams, "augmentation"):
                 wavs = self.hparams.augmentation(wavs, wav_lens)
 
-        # Feature computation and normalization
+        # Forward pass
         feats = self.hparams.compute_features(wavs)
         feats = self.modules.normalize(feats, wav_lens)
+        x = self.modules.encoder(feats.detach())
+        e_in = self.modules.embedding(tokens_bos)  # y_in bos + tokens
+        h, _ = self.modules.decoder(e_in, x, wav_lens)
 
-        return feats, wav_lens
-
-    def prepare_tokens(self, stage, tokens):
-        """Double the tokens batch if features are doubled.
-
-        Arguments
-        ---------
-        stage : sb.Stage
-            Currently executing stage.
-        tokens : tuple
-            The tokens (tensor) and their lengths (tensor).
-        """
-        tokens, token_lens = tokens
-        if hasattr(self.modules, "env_corrupt") and stage == sb.Stage.TRAIN:
-            tokens = torch.cat([tokens, tokens], dim=0)
-            token_lens = torch.cat([token_lens, token_lens], dim=0)
-        return tokens, token_lens
+        # Output layer for seq2seq log-probabilities
+        logits = self.modules.seq_lin(h)
+        p_seq = self.hparams.log_softmax(logits)
+        p_tokens, scores = self.hparams.valid_search(x, wav_lens)
+        # Compute outputs
+        if stage == sb.Stage.TRAIN:
+            current_epoch = self.hparams.epoch_counter.current
+            if current_epoch <= self.hparams.number_of_ctc_epochs:
+                # Output layer for ctc log-probabilities
+                logits = self.modules.ctc_lin(x)
+                p_ctc = self.hparams.log_softmax(logits)
+                return p_ctc, p_seq, wav_lens, p_tokens
+            else:
+                return p_seq, wav_lens, p_tokens
+        else:
+            if stage == sb.Stage.VALID:
+                pass
+                # p_tokens, scores = self.hparams.valid_search(x, wav_lens)
+            else:
+                p_tokens, scores = self.hparams.test_search(x, wav_lens)
+            return p_seq, wav_lens, p_tokens
 
     def compute_objectives(self, predictions, batch, stage):
-        """Computes the loss given the predicted and targeted outputs. We here
-        do multi-task learning and the loss is a weighted sum of the ctc + seq2seq
-        costs.
+        """Computes the loss (CTC+NLL) given predictions and targets."""
 
-        Arguments
-        ---------
-        predictions : dict
-            The output dict from `compute_forward`.
-        batch : PaddedBatch
-            This batch object contains all the relevant tensors for computation.
-        stage : sb.Stage
-            One of sb.Stage.TRAIN, sb.Stage.VALID, or sb.Stage.TEST.
+        current_epoch = self.hparams.epoch_counter.current
+        if stage == sb.Stage.TRAIN:
+            if current_epoch <= self.hparams.number_of_ctc_epochs:
+                p_ctc, p_seq, wav_lens, predicted_tokens = predictions
+            else:
+                p_seq, wav_lens, predicted_tokens = predictions
+        else:
+            p_seq, wav_lens, predicted_tokens = predictions
 
-        Returns
-        -------
-        loss : torch.Tensor
-            A one-element tensor used for backpropagating the gradient.
-        """
-        # Compute sequence loss against targets with EOS
-        tokens_eos, tokens_eos_lens = self.prepare_tokens(
-            stage, batch.tokens_eos
-        )
-        loss = sb.nnet.losses.nll_loss(
-            log_probabilities=predictions["seq_logprobs"],
-            targets=tokens_eos,
-            length=tokens_eos_lens,
-            label_smoothing=self.hparams.label_smoothing,
-        )
+        ids = batch.id
+        tokens_eos, tokens_eos_lens = batch.tokens_eos
+        tokens, tokens_lens = batch.tokens
 
-        # Add ctc loss if necessary. The total cost is a weighted sum of
-        # ctc loss + seq2seq loss
-        if self.is_ctc_active(stage):
-            # Load tokens without EOS as CTC targets
-            tokens, tokens_lens = self.prepare_tokens(stage, batch.tokens)
-            loss_ctc = self.hparams.ctc_cost(
-                predictions["ctc_logprobs"], tokens, self.feat_lens, tokens_lens
+        if hasattr(self.modules, "env_corrupt") and stage == sb.Stage.TRAIN:
+            tokens_eos = torch.cat([tokens_eos, tokens_eos], dim=0)
+            tokens_eos_lens = torch.cat(
+                [tokens_eos_lens, tokens_eos_lens], dim=0
             )
-            loss *= 1 - self.hparams.ctc_weight
-            loss += self.hparams.ctc_weight * loss_ctc
+            tokens = torch.cat([tokens, tokens], dim=0)
+            tokens_lens = torch.cat([tokens_lens, tokens_lens], dim=0)
 
+        loss_seq = self.hparams.seq_cost(
+            p_seq, tokens_eos, length=tokens_eos_lens
+        )
+
+        # Add ctc loss if necessary
+        if (
+            stage == sb.Stage.TRAIN
+            and current_epoch <= self.hparams.number_of_ctc_epochs
+        ):
+            loss_ctc = self.hparams.ctc_cost(
+                p_ctc, tokens, wav_lens, tokens_lens
+            )
+            loss = self.hparams.ctc_weight * loss_ctc
+            loss += (1 - self.hparams.ctc_weight) * loss_seq
+        else:
+            loss = loss_seq
+        # Decode token terms to words
+        predicted_words = [
+            self.hparams.tokenizer.decode_ids(utt_seq).split(" ")
+            for utt_seq in predicted_tokens
+        ]
+        target_words = [wrd.split(" ") for wrd in batch.words]
+        self.wer_metric.append(ids, predicted_words, target_words)
         if stage != sb.Stage.TRAIN:
-            # Converted predicted tokens from indexes to words
-            predicted_words = [
-                self.hparams.tokenizer.spm.decode_ids(prediction).split(" ")
-                for prediction in predictions["tokens"]
-            ]
-            target_words = [words.split(" ") for words in batch.words]
-
-            # Monitor word error rate and character error rated at
-            # valid and test time.
-            self.wer_metric.append(batch.id, predicted_words, target_words)
-            self.cer_metric.append(batch.id, predicted_words, target_words)
+            self.cer_metric.append(ids, predicted_words, target_words)
 
         return loss
 
-    def on_stage_start(self, stage, epoch):
-        """Gets called at the beginning of each epoch.
+    def fit_batch(self, batch):
+        """Train the parameters given a single batch in input"""
+        predictions = self.compute_forward(batch, sb.Stage.TRAIN)
+        loss = self.compute_objectives(predictions, batch, sb.Stage.TRAIN)
+        loss.backward()
+        if self.check_gradients(loss):
+            self.optimizer.step()
+        self.optimizer.zero_grad()
+        return loss.detach()
 
-        Arguments
-        ---------
-        stage : sb.Stage
-            One of sb.Stage.TRAIN, sb.Stage.VALID, or sb.Stage.TEST.
-        epoch : int
-            The currently-starting epoch. This is passed
-            `None` during the test stage.
-        """
-        # Set up statistics trackers for this stage
-        # In this case, we would like to keep track of the word error rate (wer)
-        # and the character error rate (cer)
+    def evaluate_batch(self, batch, stage):
+        """Computations needed for validation/test batches"""
+        predictions = self.compute_forward(batch, stage=stage)
+        with torch.no_grad():
+            loss = self.compute_objectives(predictions, batch, stage=stage)
+        return loss.detach()
+
+    def on_stage_start(self, stage, epoch):
+        """Gets called at the beginning of each epoch"""
+        self.wer_metric = self.hparams.error_rate_computer()
         if stage != sb.Stage.TRAIN:
             self.cer_metric = self.hparams.cer_computer()
-            self.wer_metric = self.hparams.error_rate_computer()
 
     def on_stage_end(self, stage, stage_loss, epoch):
-        """Gets called at the end of an epoch.
-
-        Arguments
-        ---------
-        stage : sb.Stage
-            One of sb.Stage.TRAIN, sb.Stage.VALID, sb.Stage.TEST
-        stage_loss : float
-            The average loss for all of the data processed in this stage.
-        epoch : int
-            The currently-starting epoch. This is passed
-            `None` during the test stage.
-        """
-
-        # Store the train loss until the validation stage.
+        """Gets called at the end of a epoch."""
+        # Compute/store important stats
         stage_stats = {"loss": stage_loss}
+        stage_stats["WER"] = self.wer_metric.summarize("error_rate")
         if stage == sb.Stage.TRAIN:
             self.train_stats = stage_stats
-
-        # Summarize the statistics from the stage for record-keeping.
         else:
             stage_stats["CER"] = self.cer_metric.summarize("error_rate")
-            stage_stats["WER"] = self.wer_metric.summarize("error_rate")
 
         # Perform end-of-iteration things, like annealing, logging, etc.
         if stage == sb.Stage.VALID:
-
-            # Update learning rate
             old_lr, new_lr = self.hparams.lr_annealing(stage_stats["WER"])
             sb.nnet.schedulers.update_learning_rate(self.optimizer, new_lr)
-
-            # The train_logger writes a summary to stdout and to the logfile.
             self.hparams.train_logger.log_stats(
                 stats_meta={"epoch": epoch, "lr": old_lr},
                 train_stats=self.train_stats,
                 valid_stats=stage_stats,
             )
-
-            # Save the current checkpoint and delete previous checkpoints.
             self.checkpointer.save_and_keep_only(
                 meta={"WER": stage_stats["WER"]}, min_keys=["WER"],
             )
-
-        # We also write statistics about test data to stdout and to the logfile.
         elif stage == sb.Stage.TEST:
             self.hparams.train_logger.log_stats(
-                stats_meta={
-                    "Epoch loaded": self.hparams.epoch_counter.current},
+                stats_meta={"Epoch loaded": self.hparams.epoch_counter.current},
                 test_stats=stage_stats,
             )
             with open(self.hparams.wer_file, "w") as w:
@@ -343,30 +272,34 @@ def dataio_prepare(hparams):
             dest_dir = dest_dir.joinpath("recording." + hparams["dataset"]["audio_filetype"])
             if not dest_dir.is_file():
                 audio = shutil.copy(audio, dest_dir)
-        resample_reqd = False
-        mono_conversion = False
+
+        # resample_reqd = False
+        # mono_conversion = False
         if isinstance(start, str):
             metadata = torchaudio.info(audio)
-            if metadata.sample_rate != hparams["sample_rate"]:
-                resample_reqd = True
-                # effects.append(['rate', str(hparams["sample_rate"])])
-            if metadata.num_channels != hparams["num_channels"]:
-                mono_conversion = True
-                # effects.append(['channels', str(hparams["num_channels"])])
+        #    if metadata.sample_rate != hparams["sample_rate"]:
+        #        resample_reqd = True
+        #        effects.append(['rate', str(hparams["sample_rate"])])
+        #    if metadata.num_channels != hparams["num_channels"]:
+        #        mono_conversion = True
+        #        effects.append(['channels', str(hparams["num_channels"])])
             start = int(time_str_to_seconds(start) * metadata.sample_rate)
             end = int(time_str_to_seconds(end) * metadata.sample_rate)
         num_frames = end - start
         audio, fs = torchaudio.load(
             audio, num_frames=num_frames, frame_offset=start)
+        # a = time.time()
+        audio = audio.transpose(0, 1)
+        sig = hparams["preprocess_audio"](audio, metadata.sample_rate)
+        # print("preprocess", time.time()-a)
         # if len(effects) > 0:
         #   audio, fs = torchaudio.sox_effects.apply_effects_tensor(audio, fs, effects)
-        if resample_reqd:
-            audio = torchaudio.transforms.Resample(orig_freq=metadata.sample_rate, new_freq=hparams["sample_rate"]).forward(audio)
-        if mono_conversion:
-            audio = torch.mean(audio, dim=0).unsqueeze(0)
-
-        audio = audio.transpose(0, 1)
-        sig = audio.squeeze(1)
+        # if resample_reqd:
+        #    audio = torchaudio.transforms.Resample(orig_freq=metadata.sample_rate, new_freq=hparams["sample_rate"]).forward(audio)
+        # if mono_conversion:
+        #    audio = torch.mean(audio, dim=0).unsqueeze(0)
+        # audio = audio.transpose(0, 1)
+        # sig = audio.squeeze(1)
         return sig
         # sig = sb.dataio.dataio.read_audio(
         #    {"file": audio, "start": start, "stop": end})
@@ -383,7 +316,7 @@ def dataio_prepare(hparams):
     def text_pipeline(txt):
         """Processes the transcriptions to generate proper labels."""
         yield txt
-        tokens_list = hparams["tokenizer"].spm.encode_as_ids(txt)
+        tokens_list = hparams["tokenizer"].encode_as_ids(txt)
         yield tokens_list
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
         yield tokens_bos
@@ -437,25 +370,6 @@ def dataio_prepare(hparams):
     return datasets
 
 
-def load_pretrained(hparams):
-    """This function loads a pre-trained ASR model's parameters to the model
-    defined by the user. It can either be a web-url or a simple path.
-
-
-    Arguments
-    ---------
-    hparams : dict
-        This dictionary is loaded from the `train.yaml` file, and it includes
-        all the hyperparameters needed for dataset construction and loading.
-        Expects the dict to have "save_folder" and "model" and "pretrain_model"
-    """
-    save_model_path = os.path.join(
-        hparams["save_folder"], "pretrained_model.ckpt"
-    )
-    download_file(hparams["pretrain_model"], save_model_path)
-    hparams["model"].load_state_dict(torch.load(save_model_path), strict=True)
-
-
 if __name__ == "__main__":
 
     # Reading command line arguments
@@ -498,11 +412,8 @@ if __name__ == "__main__":
 
     # We can now directly create the datasets for training, valid, and test
     datasets = dataio_prepare(hparams)
-
-    # In this case, pre-training is essential because mini-librispeech is not
-    # big enough to train an end-to-end model from scratch. With bigger dataset
-    # you can train from scratch and avoid this step.
-    # load_pretrained(hparams)
+    sb.utils.distributed.run_on_main(hparams["pretrainer"].collect_files)
+    hparams["pretrainer"].load_collected(device=run_opts["device"])
 
     # Trainer initialization
     asr_brain = ASR(
