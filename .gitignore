@@ -5,3 +5,6 @@
 runs
 metadata/durations.py
 __pycache__
+results
+*libri*.*
+hparams/librispeech.yaml

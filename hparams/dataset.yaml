@@ -1,22 +1,22 @@
 # Seed needs to be set at top of yaml, before objects with parameters are instantiated
-seed: 8500
+seed: 7007
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
 
 # Path where data manifest files will be stored
 train_annotation: !ref <local_dataset_folder>/train.json
 valid_annotation: !ref <local_dataset_folder>/val.json
-test_annotation: !ref <local_dataset_folder>/test.json
+test_annotation: !ref <local_dataset_folder>/train.json
 
 # Set up folders for reading from and writing to
 data_folder: /m/triton/scratch/biz/bizspeech/MEDIA # data folder of BizSpeech
 hours_reqd: 34
-nonnative: 0.5
+nonnative: 0.1
 qna: 0.5
 non_CEO_utt: False
 strict_included: True
-utterance_duration_limit: 20
+utterance_duration_limit: 10 # in seconds
 audio_filetype: wav
-trainValTest: (0.6, 0.2) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
+trainValTest: (0.8, 0.1) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
 output_format: json # Other option being csv
 exclude_event_json: metadata/exclude_event_list.json # or use null to include all (may lead to errors)
 include_event_json: metadata/cloudasr_testset_lists.json # or use null to include all

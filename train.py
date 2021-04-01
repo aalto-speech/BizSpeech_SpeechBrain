@@ -1,5 +1,6 @@
 #!/usr/bin/env/python3
 """Recipe for training a sequence-to-sequence ASR system with mini-librispeech.
+
 The system employs an encoder, a decoder, and an attention mechanism
 between them. Decoding is performed with beam search coupled with a neural
 language model.
@@ -44,7 +45,6 @@ Authors
 """
 
 import sys
-import time
 import torch
 import shutil
 import logging
@@ -60,22 +60,24 @@ logger = logging.getLogger(__name__)
 # Brain class for speech recognition training
 class ASR(sb.Brain):
     def compute_forward(self, batch, stage):
-        """Runs all the computation of the CTC + seq2seq ASR. It returns the
-        posterior probabilities of the CTC and seq2seq networks.
+        """Run all the computation of the CTC + seq2seq ASR.
 
-        Arguments
+        It returns the posterior probabilities of the CTC and seq2seq networks.
+
+        Arguments:
         ---------
         batch : PaddedBatch
             This batch object contains all the relevant tensors for computation.
         stage : sb.Stage
             One of sb.Stage.TRAIN, sb.Stage.VALID, or sb.Stage.TEST.
 
-        Returns
+        Returns:
         -------
         predictions : dict
             At training time it returns predicted seq2seq log probabilities.
             If needed it also returns the ctc output log probabilities.
             At validation/test time, it returns the predicted tokens as well.
+
         """
         batch = batch.to(self.device)
         wavs, wav_lens = batch.sig
@@ -95,11 +97,13 @@ class ASR(sb.Brain):
 
         # Forward pass
         feats = self.hparams.compute_features(wavs)
+        # torchaudio.save(str(i)+"test.wav", wavs.to("cpu"), sample_rate=hparams["sample_rate"], channels_first=True)
         feats = self.modules.normalize(feats, wav_lens)
         x = self.modules.encoder(feats.detach())
         e_in = self.modules.embedding(tokens_bos)  # y_in bos + tokens
         h, _ = self.modules.decoder(e_in, x, wav_lens)
-
+        # make_dot(self.modules.encoder(feats.detach()), params=dict(self.modules.encoder.named_parameters())).render("enc", format="png")
+        # make_dot(self.modules.decoder(e_in, x, wav_lens), params=dict(self.modules.decoder.named_parameters())).render("dec", format="png")
         # Output layer for seq2seq log-probabilities
         logits = self.modules.seq_lin(h)
         p_seq = self.hparams.log_softmax(logits)
@@ -109,8 +113,8 @@ class ASR(sb.Brain):
             current_epoch = self.hparams.epoch_counter.current
             if current_epoch <= self.hparams.number_of_ctc_epochs:
                 # Output layer for ctc log-probabilities
-                logits = self.modules.ctc_lin(x)
-                p_ctc = self.hparams.log_softmax(logits)
+                ctc_logits = self.modules.ctc_lin(x)
+                p_ctc = self.hparams.log_softmax(ctc_logits)
                 return p_ctc, p_seq, wav_lens, p_tokens
             else:
                 return p_seq, wav_lens, p_tokens
@@ -123,8 +127,7 @@ class ASR(sb.Brain):
             return p_seq, wav_lens, p_tokens
 
     def compute_objectives(self, predictions, batch, stage):
-        """Computes the loss (CTC+NLL) given predictions and targets."""
-
+        """Compute the loss (CTC+NLL) given predictions and targets."""
         current_epoch = self.hparams.epoch_counter.current
         if stage == sb.Stage.TRAIN:
             if current_epoch <= self.hparams.number_of_ctc_epochs:
@@ -146,9 +149,15 @@ class ASR(sb.Brain):
             tokens = torch.cat([tokens, tokens], dim=0)
             tokens_lens = torch.cat([tokens_lens, tokens_lens], dim=0)
 
-        loss_seq = self.hparams.seq_cost(
-            p_seq, tokens_eos, length=tokens_eos_lens
+        loss_seq = sb.nnet.losses.nll_loss(
+            log_probabilities=p_seq,
+            targets=tokens_eos,
+            length=tokens_eos_lens,
+            label_smoothing=self.hparams.label_smoothing,
         )
+        # self.hparams.seq_cost(
+        #    p_seq, tokens_eos, length=tokens_eos_lens
+        # )
 
         # Add ctc loss if necessary
         if (
@@ -175,7 +184,7 @@ class ASR(sb.Brain):
         return loss
 
     def fit_batch(self, batch):
-        """Train the parameters given a single batch in input"""
+        """Train the parameters given a single batch in input."""
         predictions = self.compute_forward(batch, sb.Stage.TRAIN)
         loss = self.compute_objectives(predictions, batch, sb.Stage.TRAIN)
         loss.backward()
@@ -185,20 +194,20 @@ class ASR(sb.Brain):
         return loss.detach()
 
     def evaluate_batch(self, batch, stage):
-        """Computations needed for validation/test batches"""
+        """Compute needed for validation/test batches."""
         predictions = self.compute_forward(batch, stage=stage)
         with torch.no_grad():
             loss = self.compute_objectives(predictions, batch, stage=stage)
         return loss.detach()
 
     def on_stage_start(self, stage, epoch):
-        """Gets called at the beginning of each epoch"""
+        """Run at the beginning of each epoch."""
         self.wer_metric = self.hparams.error_rate_computer()
         if stage != sb.Stage.TRAIN:
             self.cer_metric = self.hparams.cer_computer()
 
     def on_stage_end(self, stage, stage_loss, epoch):
-        """Gets called at the end of a epoch."""
+        """Run at the end of a epoch."""
         # Compute/store important stats
         stage_stats = {"loss": stage_loss}
         stage_stats["WER"] = self.wer_metric.summarize("error_rate")
@@ -229,21 +238,22 @@ class ASR(sb.Brain):
 
 
 def dataio_prepare(hparams):
-    """This function prepares the datasets to be used in the brain class.
+    """Prepare the datasets to be used in the brain class.
+
     It also defines the data processing pipeline through user-defined functions.
 
-
-    Arguments
+    Arguments:
     ---------
     hparams : dict
         This dictionary is loaded from the `train.yaml` file, and it includes
         all the hyperparameters needed for dataset construction and loading.
 
-    Returns
+    Returns:
     -------
     datasets : dict
         Dictionary containing "train", "valid", and "test" keys that correspond
         to the DynamicItemDataset objects.
+
     """
     def time_str_to_seconds(time_str):
         """
@@ -314,7 +324,7 @@ def dataio_prepare(hparams):
         "words", "tokens_list", "tokens_bos", "tokens_eos", "tokens"
     )
     def text_pipeline(txt):
-        """Processes the transcriptions to generate proper labels."""
+        """Process the transcriptions to generate proper labels."""
         yield txt
         tokens_list = hparams["tokenizer"].encode_as_ids(txt)
         yield tokens_list
@@ -407,8 +417,7 @@ if __name__ == "__main__":
             "exclude_event_json": hparams["dataset"]["exclude_event_json"],
             "utterance_duration_limit": hparams["dataset"]["utterance_duration_limit"],
             "audio_filetype": hparams["dataset"]["audio_filetype"]
-        },
-    )
+        },)
 
     # We can now directly create the datasets for training, valid, and test
     datasets = dataio_prepare(hparams)
