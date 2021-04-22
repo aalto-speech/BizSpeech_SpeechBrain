@@ -1,5 +1,5 @@
 # Seed needs to be set at top of yaml, before objects with parameters are instantiated
-seed: 7007
+seed: 78787
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
 
 # Path where data manifest files will be stored
@@ -9,7 +9,7 @@ test_annotation: !ref <local_dataset_folder>/train.json
 
 # Set up folders for reading from and writing to
 data_folder: /m/triton/scratch/biz/bizspeech/MEDIA # data folder of BizSpeech
-hours_reqd: 34
+hours_reqd: 100
 nonnative: 0.1
 qna: 0.5
 non_CEO_utt: False

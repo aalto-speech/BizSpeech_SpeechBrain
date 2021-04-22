@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=bizspeech_train
+#SBATCH --job-name=newseed_bizspeech_train
 #SBATCH -p dgx-spa
 #SBATCH -c 16
-#SBATCH --time=23:00:00
+#SBATCH --time=50:00:00
 #SBATCH --gres=gpu:v100:1
-#SBATCH --mem-per-cpu=6GB
+#SBATCH --mem-per-cpu=4GB
 
 module load cuda
 python tokenizer_train.py hparams/tokenizer.yaml
