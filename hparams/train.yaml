@@ -1,8 +1,6 @@
 dataset: !include:dataset.yaml
 tokenizer_params: !include:tokenizer.yaml
 
-copy_to_local: True
-local_dest_dir: /tmp/data_dir
 
 tokenizer: !new:sentencepiece.SentencePieceProcessor
 # The pretrainer allows a mapping between pretrained files and instances that
@@ -31,7 +29,6 @@ number_of_ctc_epochs: 0
 batch_size: 4
 lr: 1.0
 ctc_weight: 0.5
-sorting: ascending
 ckpt_interval_minutes: 15 # save checkpoint every N min
 label_smoothing: 0.1
 
@@ -48,8 +45,6 @@ test_dataloader_opts:
 
 
 # Feature parameters
-sample_rate: 16000
-num_channels: 1
 n_fft: 400
 n_mels: 40
 
@@ -95,13 +90,11 @@ temperature: 1.25
 epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
     limit: !ref <number_of_epochs>
 
-preprocess_audio: !new:speechbrain.dataio.preprocess.AudioNormalizer
-    sample_rate: !ref <sample_rate>
-    mix: avg-to-mono
+
 
 # Feature extraction
 compute_features: !new:speechbrain.lobes.features.Fbank
-    sample_rate: !ref <sample_rate>
+    sample_rate: !ref <dataset[sample_rate]>
     n_fft: !ref <n_fft>
     n_mels: !ref <n_mels>
 
@@ -121,7 +114,7 @@ normalize: !new:speechbrain.processing.features.InputNormalization
 
 # Adds speech change + time and frequnecy dropouts (time-domain implementation).
 # augmentation: !new:speechbrain.lobes.augment.TimeDomainSpecAugment
-#    sample_rate: !ref <sample_rate>
+#    sample_rate: !ref <dataset[sample_rate]>
 #    speeds: [95, 100, 105]
 
 # The CRDNN model is an encoder that combines CNNs, RNNs, and DNNs.

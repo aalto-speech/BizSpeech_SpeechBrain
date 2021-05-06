@@ -42,20 +42,7 @@ if __name__ == "__main__":
     sb.utils.distributed.run_on_main(
         prepare_bizspeech_speechbrain,
         kwargs={
-            "local_dataset_folder": hparams["dataset"]["local_dataset_folder"],
-            "data_folder": hparams["dataset"]["data_folder"],
-            "hours_reqd": hparams["dataset"]["hours_reqd"],
-            "nonnative": hparams["dataset"]["nonnative"],
-            "qna": hparams["dataset"]["qna"],
-            "strict_included": hparams["dataset"]["strict_included"],
-            "non_CEO_utt": hparams["dataset"]["non_CEO_utt"],
-            "seed": hparams["dataset"]["seed"],
-            "trainValTest": hparams["dataset"]["trainValTest"],
-            "output_format": hparams["dataset"]["output_format"],
-            "include_event_json": hparams["dataset"]["include_event_json"],
-            "exclude_event_json": hparams["dataset"]["exclude_event_json"],
-            "utterance_duration_limit": hparams["dataset"]["utterance_duration_limit"],
-            "audio_filetype": hparams["dataset"]["audio_filetype"]
+            "hparams": hparams["dataset"]
         },
     )
 

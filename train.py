@@ -230,7 +230,8 @@ class ASR(sb.Brain):
             )
         elif stage == sb.Stage.TEST:
             self.hparams.train_logger.log_stats(
-                stats_meta={"Epoch loaded": self.hparams.epoch_counter.current},
+                stats_meta={
+                    "Epoch loaded": self.hparams.epoch_counter.current},
                 test_stats=stage_stats,
             )
             with open(self.hparams.wer_file, "w") as w:
@@ -277,9 +278,11 @@ def dataio_prepare(hparams):
         # effects = []
         if hparams["copy_to_local"]:
             event_id = str(pathlib.Path(audio).resolve().parent).split("/")[-1]
-            dest_dir = pathlib.Path(hparams["local_dest_dir"]).resolve().joinpath(event_id)
+            dest_dir = pathlib.Path(
+                hparams["local_dest_dir"]).resolve().joinpath(event_id)
             dest_dir.mkdir(parents=True, exist_ok=True)
-            dest_dir = dest_dir.joinpath("recording." + hparams["dataset"]["audio_filetype"])
+            dest_dir = dest_dir.joinpath(
+                "recording." + hparams["dataset"]["audio_filetype"])
             if not dest_dir.is_file():
                 audio = shutil.copy(audio, dest_dir)
 
@@ -358,18 +361,17 @@ def dataio_prepare(hparams):
     # Sorting traiing data with ascending order makes the code  much
     # faster  because we minimize zero-padding. In most of the cases, this
     # does not harm the performance.
-    if hparams["sorting"] == "ascending":
-        datasets["train"] = datasets["train"].filtered_sorted(
-            sort_key="duration")
+    if hparams["dataset"]["sorting"] == "ascending":
+        # datasets["train"] = datasets["train"].filtered_sorted(
+        #    sort_key="duration")
         hparams["train_dataloader_opts"]["shuffle"] = False
 
-    elif hparams["sorting"] == "descending":
-        datasets["train"] = datasets["train"].filtered_sorted(
-            sort_key="length", reverse=True
-        )
+    elif hparams["dataset"]["sorting"] == "descending":
+        # datasets["train"] = datasets["train"].filtered_sorted(
+        #    sort_key="length", reverse=True)
         hparams["train_dataloader_opts"]["shuffle"] = False
 
-    elif hparams["sorting"] == "random":
+    elif hparams["dataset"]["sorting"] == "random":
         hparams["train_dataloader_opts"]["shuffle"] = True
         pass
 
@@ -403,21 +405,8 @@ if __name__ == "__main__":
     sb.utils.distributed.run_on_main(
         prepare_bizspeech_speechbrain,
         kwargs={
-            "local_dataset_folder": hparams["dataset"]["local_dataset_folder"],
-            "data_folder": hparams["dataset"]["data_folder"],
-            "hours_reqd": hparams["dataset"]["hours_reqd"],
-            "nonnative": hparams["dataset"]["nonnative"],
-            "qna": hparams["dataset"]["qna"],
-            "strict_included": hparams["dataset"]["strict_included"],
-            "non_CEO_utt": hparams["dataset"]["non_CEO_utt"],
-            "seed": hparams["dataset"]["seed"],
-            "trainValTest": hparams["dataset"]["trainValTest"],
-            "output_format": hparams["dataset"]["output_format"],
-            "include_event_json": hparams["dataset"]["include_event_json"],
-            "exclude_event_json": hparams["dataset"]["exclude_event_json"],
-            "utterance_duration_limit": hparams["dataset"]["utterance_duration_limit"],
-            "audio_filetype": hparams["dataset"]["audio_filetype"]
-        },)
+            "hparams": hparams["dataset"]
+        })
 
     # We can now directly create the datasets for training, valid, and test
     datasets = dataio_prepare(hparams)

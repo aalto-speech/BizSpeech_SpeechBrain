@@ -4,13 +4,18 @@ Author:
 Anand C U
 """
 
-from hyperpyyaml import load_hyperpyyaml
-import speechbrain as sb
-import numpy as np
-import pathlib
-import logging
 import json
+import logging
+import pathlib
+import shutil
 import sys
+
+import numpy as np
+import speechbrain as sb
+import torchaudio
+import webdataset as wds
+from hyperpyyaml import load_hyperpyyaml
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -32,40 +37,36 @@ def time_str_to_seconds(time_str):
 class create_DataSet:
     """Class to create susets of Bizspeech dataset according to required native/nonnative speaker ratio, qna/presentation ratio."""
 
-    def __init__(self, dataPath, totalDuration, nonnative, qna, strict_included, non_CEO_utt, seed, trainValTest, utterance_duration_limit, audio_filetype, included_events=[], excluded_events=[]):
+    def __init__(self, hparams: dict, included_events: list = [], excluded_events: list = []):
         """Init function.
 
         Args:
-        ----
-            - dataPath : Location of the dataset
-            - totalDuration: total duration required for the subset. Used to calculate the sub totals according to ratios
-            - included_events: Specify the eventIDs to choose from first before moving on to other data
-            - excluded_events: Specify the eventIDs to exlude when creating subset. Might include invalid data, etc.
-            - nonnative: Ratio of the dataset that needs to be nonnative. (1-nonnative) is the native percent.
-            - qna: Ratio of the dataset that needs to be from qna section. (1-qna) is the presentation percent.
-            - strict_included: Only pick events from included_events. Do not include others even if the data in included was not enough.
-            - non_CEO_utt: Choose non CEO data from the files. Usually these do not have native/nonnative information.
-            - seed: Seed to use for numpy randomisation
-
+            hparams (dict): Hyperparameters dictionary, usually contains contents from 'dataset.yaml' loaded to a dict. 
+            included_events (list, optional): Specify the eventIDs to choose from first before moving on to other data. Defaults to [].
+            excluded_events (list, optional): Specify the eventIDs to exlude when creating subset. Might include invalid data, etc.. Defaults to [].
         """
-        if non_CEO_utt:
-            logger.info("Native/ Non Native Criteria is not well defined for Non CEOs. The criteria ratios may not be accurate with this enabled")
-        self.non_CEO_utt = non_CEO_utt
+
+        if hparams["non_CEO_utt"]:
+            logger.info(
+                "Native/ Non Native Criteria is not well defined for Non CEOs. The criteria ratios may not be accurate with this enabled")
         self.dataset_dict = {}
         self.split_dicts = {"train": {}, "val": {}, "test": {}}
-        self.dataPath = dataPath
-        self.non_CEO_utt = non_CEO_utt
+        self.dataPath = hparams["data_folder"]
+        self.non_CEO_utt = hparams["non_CEO_utt"]
         self.bizspeech_metadata = self.load_Bizspeech_metadata()
-        self.utterance_duration_limit = utterance_duration_limit
-        self.audio_filetype = audio_filetype
+        self.utterance_duration_limit = hparams["utterance_duration_limit"]
+        self.audio_filetype = hparams["audio_filetype"]
+        trainValTest = hparams["trainValTest"]
         if not included_events:
             included_events = list(self.bizspeech_metadata.keys())
         event_list = list(set(included_events) - set(excluded_events))
         event_list = np.sort(event_list)
-        np.random.seed(seed)
+        np.random.seed(hparams["seed"])
         np.random.shuffle(event_list)
         logger.info(f"Picking data from {len(event_list)} events.")
-        totalDuration = totalDuration * 60 * 60 * 1000
+        totalDuration = hparams["hours_reqd"] * 60 * 60 * 1000
+        nonnative = hparams["nonnative"]
+        qna = hparams["qna"]
         self.duration_dict_limit = {
             "nativepresentation": totalDuration * (1 - nonnative) * (1 - qna),
             "nonnativepresentation": totalDuration * nonnative * (1 - qna),
@@ -80,8 +81,9 @@ class create_DataSet:
         progress_complete = self.dataset_compile_from_event_list(event_list)
         if not progress_complete:
             if included_events:
-                if strict_included:
-                    logger.info("Not all the categories were completed with the given criteria. Try freeing up the parameters and split ratios or reduce the number of hours of data.")
+                if hparams["strict_included"]:
+                    logger.info(
+                        "Not all the categories were completed with the given criteria. Try freeing up the parameters and split ratios or reduce the number of hours of data.")
                 else:
                     logger.info(
                         "Using events from superset apart from included events to complete the required dataset.")
@@ -90,7 +92,7 @@ class create_DataSet:
                     event_list = list(
                         (set(included_events_whole) - set(excluded_events)) - set(included_events))
                     event_list = np.sort(event_list)
-                    np.random.seed(seed)
+                    np.random.seed(hparams["seed"])
                     np.random.shuffle(event_list)
                     progress_complete = self.dataset_compile_from_event_list(
                         event_list)
@@ -98,7 +100,8 @@ class create_DataSet:
                         logger.info(
                             "Superset was insufficient for the given data split ratios and number of hours. Try reducing them to get the required data split.")
             else:
-                logger.info("Not all the categories were completed with the given criteria. Try freeing up the parameters and split ratios or reduce the number of hours of data.")
+                logger.info(
+                    "Not all the categories were completed with the given criteria. Try freeing up the parameters and split ratios or reduce the number of hours of data.")
 
         utterance_list = list(self.dataset_dict.keys())
         idxes_list = np.split(utterance_list, [int(trainValTest[0] * len(utterance_list)), int(
@@ -109,6 +112,60 @@ class create_DataSet:
             self.split_dicts["val"][event] = self.dataset_dict[event]
         for event in idxes_list[2]:
             self.split_dicts["test"][event] = self.dataset_dict[event]
+
+        if hparams["sorting"] == "ascending":
+            self.split_dicts["val"] = {k: self.split_dicts["val"][k] for k in sorted(
+                self.split_dicts["val"].keys(), key=lambda x: self.split_dicts["val"][x]["duration"])}
+            self.split_dicts["train"] = {k: self.split_dicts["train"][k] for k in sorted(
+                self.split_dicts["train"].keys(), key=lambda x: self.split_dicts["train"][x]["duration"])}
+            self.split_dicts["test"] = {k: self.split_dicts["test"][k] for k in sorted(
+                self.split_dicts["test"].keys(), key=lambda x: self.split_dicts["test"][x]["duration"])}
+        elif hparams["sorting"] == "descending":
+            reverse = True
+            self.split_dicts["val"] = {k: self.split_dicts["val"][k] for k in sorted(
+                self.split_dicts["val"].keys(), key=lambda x: self.split_dicts["val"][x]["duration"], reverse=reverse)}
+            self.split_dicts["train"] = {k: self.split_dicts["train"][k] for k in sorted(
+                self.split_dicts["train"].keys(), key=lambda x: self.split_dicts["train"][x]["duration"], reverse=reverse)}
+            self.split_dicts["test"] = {k: self.split_dicts["test"][k] for k in sorted(
+                self.split_dicts["test"].keys(), key=lambda x: self.split_dicts["test"][x]["duration"], reverse=reverse)}
+        else:
+            # No sorting required
+            pass
+
+    def load_audio(self, audio: str, start: str, end: str, copy_to_local: bool, local_dest_dir: str, audio_filetype: str, preprocess_audio):
+        """Load the audio signal.
+
+        Args:
+            audio (str): Filepath of the audio file
+            start (str): Start timestamp of the audio utterance
+            end (str): End timestamp of the audio utterance
+            copy_to_local (bool): [description]
+            local_dest_dir (str): [description]
+            audio_filetype (str): [description]
+            preprocess_audio ([type]): [description]
+
+        Returns:
+            sig: Audio signal cropped and preprocessed.
+        """
+
+        if copy_to_local:
+            event_id = str(pathlib.Path(audio).resolve().parent).split("/")[-1]
+            dest_dir = pathlib.Path(
+                local_dest_dir).resolve().joinpath(event_id)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_dir = dest_dir.joinpath("recording." + audio_filetype)
+            if not dest_dir.is_file():
+                audio = shutil.copy(audio, dest_dir)
+
+        metadata = torchaudio.info(audio)
+        start = int(time_str_to_seconds(start) * metadata.sample_rate)
+        end = int(time_str_to_seconds(end) * metadata.sample_rate)
+        num_frames = end - start
+        audio, fs = torchaudio.load(
+            audio, num_frames=num_frames, frame_offset=start)
+        audio = audio.transpose(0, 1)
+        sig = preprocess_audio(audio, metadata.sample_rate)
+        return sig
 
     def load_Bizspeech_metadata(self):
         """Load Metadata from json file. Returns dictionary with eventID as key."""
@@ -168,6 +225,32 @@ class create_DataSet:
         pd.DataFrame(items).to_csv(filepath + "/test.csv", index=False, columns=[
             "utterance_ID", "category", "start", "end", "spkID", "txt"])
 
+    def json_to_webdataset_tar(self, dataset: str, dataset_dir: str, shard_maxcount: int, copy_to_local: bool, local_dest_dir: str, audio_filetype: str, preprocess_audio):
+        """Convert dict input to webdataset tar format.
+
+        Args:
+            dataset_dict (dict): Dictionary with the dataset parameters 
+            hparams (dict): Hyperparameters dictionary loaded from YAML
+        """
+        dataset_dict = self.split_dicts[dataset]
+
+        pattern = str(dataset_dir + "/" + dataset + "_shard" + "-%06d.tar")
+        with wds.ShardWriter(pattern, maxcount=shard_maxcount) as sink:
+            for audio_utt in tqdm(dataset_dict):
+                sig = self.load_audio(audio=dataset_dict[audio_utt]["audio"], start=dataset_dict[audio_utt]["start"], end=dataset_dict[audio_utt]["end"],
+                                      copy_to_local=copy_to_local, local_dest_dir=local_dest_dir, audio_filetype=audio_filetype, preprocess_audio=preprocess_audio)
+                sample = {
+                    "__key__": audio_utt,
+                    "wav.pyd": sig,
+                    "meta.json": {
+                        "speaker_id": dataset_dict[audio_utt]["spkID"],
+                        "category": dataset_dict[audio_utt]["category"],
+                        "utterance_id": audio_utt,
+                        "txt": dataset_dict[audio_utt]["txt"],
+                    },
+                }
+                sink.write(sample)
+
     def dataset_compile_from_event_list(self, event_list):
         """Iterate over given event list and create the dataset dictionary based on data from TimeAligned Transcript.
 
@@ -225,52 +308,49 @@ class create_DataSet:
         return progress_complete
 
 
-def prepare_bizspeech_speechbrain(local_dataset_folder, data_folder, hours_reqd, nonnative=0.5, qna=0.5, strict_included=False, non_CEO_utt=False, seed=0, trainValTest=[0.6, 0.2], output_format="json", exclude_event_json=None, include_event_json=None, utterance_duration_limit=30, audio_filetype="mp3"):
+def prepare_bizspeech_speechbrain(hparams: dict):
     """Entrypoint for speechbrain function that uses a method directly as a parameter.
 
     Args:
-    ----
-        - local_dataset_folder: Folder to store the dataset files train, val and test JSONs
-        - data_folder : Location of the dataset
-        - hours_reqd: total duration required for the subset. Used to calculate the sub totals according to ratios
-        - nonnative: Ratio of the dataset that needs to be nonnative. (1-nonnative) is the native percent.
-        - qna: Ratio of the dataset that needs to be from qna section. (1-qna) is the presentation percent.
-        - strict_included: Only pick events from included_events. Do not include others even if the data in included was not enough.
-        - non_CEO_utt: Choose non CEO data from the files. Usually these do not have native/nonnative information.
-        - seed: Seed to use for numpy randomisation
-        - trainValTest: List/tuple of len 2. First is the train portion, second  is the val. Remaining will be the test portion.
-        - output_format: Specify the output format. json/csv
-        - included_events: Specify the eventIDs to choose from first before moving on to other data
-        - excluded_events: Specify the eventIDs to exlude when creating subset. Might include invalid data, etc.
-        - utterance_duration_limit: Specify the upper limit of utterance length in seconds to ignore
-
+        hparams ([type]): [description]
     """
-    training_file = pathlib.Path(local_dataset_folder + "/train.json")
+    training_file = pathlib.Path(
+        hparams["local_dataset_folder"] + "/train.json")
     if training_file.is_file():
         logger.info(f"{training_file} exists. Skipping dataset preparation.")
         return
-    dest_dir = pathlib.Path(local_dataset_folder).resolve().parent
+    dest_dir = pathlib.Path(hparams["local_dataset_folder"]).resolve().parent
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    if exclude_event_json:
+    if hparams["exclude_event_json"]:
         sb.utils.data_utils.download_file(
-            exclude_event_json, local_dataset_folder + "/exclude_list.json")
-        with open(local_dataset_folder + "/exclude_list.json") as fh:
+            hparams["exclude_event_json"], hparams["local_dataset_folder"] + "/exclude_list.json")
+        with open(hparams["local_dataset_folder"] + "/exclude_list.json") as fh:
             exclude_list = [item for sublist in list(
                 json.load(fh).values()) for item in sublist]
-    if include_event_json:
+    if hparams["include_event_json"]:
         sb.utils.data_utils.download_file(
-            include_event_json, local_dataset_folder + "/include_list.json")
-        with open(local_dataset_folder + "/include_list.json") as fh:
+            hparams["include_event_json"], hparams["local_dataset_folder"] + "/include_list.json")
+        with open(hparams["local_dataset_folder"] + "/include_list.json") as fh:
             include_list = [item for sublist in list(
                 json.load(fh).values()) for item in sublist]
-    datasetObj = create_DataSet(data_folder, hours_reqd, nonnative, qna, strict_included, non_CEO_utt, seed, trainValTest,
-                                utterance_duration_limit, audio_filetype, included_events=include_list, excluded_events=exclude_list, )
-    if output_format == "json":
-        datasetObj.parse_to_json(local_dataset_folder)
-        logger.info(f"Created JSON dataset files under {local_dataset_folder} directory.")
+    datasetObj = create_DataSet(
+        hparams, included_events=include_list, excluded_events=exclude_list)
+    if hparams["output_format"] == "json":
+        datasetObj.parse_to_json(hparams["local_dataset_folder"])
+        logger.info(
+            f'Created JSON dataset files under {hparams["local_dataset_folder"]} directory.')
+        if hparams["use_wds"]:
+            datasetObj.json_to_webdataset_tar("train", hparams["local_dataset_folder"], hparams["shard_maxcount"],
+                                              hparams["copy_to_local"], hparams["local_dest_dir"], hparams["audio_filetype"], hparams["preprocess_audio"])
+            datasetObj.json_to_webdataset_tar("val", hparams["local_dataset_folder"], hparams["shard_maxcount"],
+                                              hparams["copy_to_local"], hparams["local_dest_dir"], hparams["audio_filetype"], hparams["preprocess_audio"])
+            datasetObj.json_to_webdataset_tar("test", hparams["local_dataset_folder"], hparams["shard_maxcount"],
+                                              hparams["copy_to_local"], hparams["local_dest_dir"], hparams["audio_filetype"], hparams["preprocess_audio"])
     else:
-        datasetObj.parse_to_csv(local_dataset_folder)
+        datasetObj.parse_to_csv(hparams["local_dataset_folder"])
+        if hparams["use_wds"]:
+            logger.info("Webdataset from csv is not supported!")
 
 
 if __name__ == '__main__':
@@ -293,19 +373,6 @@ if __name__ == '__main__':
     sb.utils.distributed.run_on_main(
         prepare_bizspeech_speechbrain,
         kwargs={
-            "local_dataset_folder": hparams["local_dataset_folder"],
-            "data_folder": hparams["data_folder"],
-            "hours_reqd": hparams["hours_reqd"],
-            "nonnative": hparams["nonnative"],
-            "qna": hparams["qna"],
-            "strict_included": hparams["strict_included"],
-            "non_CEO_utt": hparams["non_CEO_utt"],
-            "seed": hparams["seed"],
-            "trainValTest": hparams["trainValTest"],
-            "output_format": hparams["output_format"],
-            "include_event_json": hparams["include_event_json"],
-            "exclude_event_json": hparams["exclude_event_json"],
-            "utterance_duration_limit": hparams["utterance_duration_limit"],
-            "audio_filetype": hparams["audio_filetype"]
+            "hparams": hparams,
         },
     )
