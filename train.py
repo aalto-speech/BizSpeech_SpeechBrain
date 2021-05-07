@@ -1,57 +1,22 @@
-#!/usr/bin/env/python3
 """Recipe for training a sequence-to-sequence ASR system with mini-librispeech.
 
-The system employs an encoder, a decoder, and an attention mechanism
-between them. Decoding is performed with beam search coupled with a neural
-language model.
-
-To run this recipe, do the following:
-> python train.py train.yaml
-
-With the default hyperparameters, the system employs an LSTM encoder.
-The decoder is based on a standard  GRU. Beam search coupled with an RNN language
-model is used on the top of decoder probabilities.
-
-The neural network is trained on both CTC and negative-log likelihood
-targets and sub-word units estimated with Byte Pairwise Encoding (BPE)
-are used as basic recognition tokens. Training is performed on the mini-librispeech
-dataset. Note that this is a tiny dataset used here just to
-provide a working example. To achieve a better performance you have to train with
-larger datasets, such as the full LibriSpeech one. In this case, to allow the
-model to converge, we pre-train it with a bigger one (trained on the full librispeech
-with the seq2seq 1k BPE recipe).
-
-The experiment file is flexible enough to support a large variety of
-different systems. By properly changing the parameter files, you can try
-different encoders, decoders, tokens (e.g, characters instead of BPE).
-
-This recipe assumes that the tokenizer and the LM are already trained.
-To avoid token mismatches, the tokenizer used for the acoustic model is
-the same use for the LM.  The recipe downloads the pre-trained tokenizer
-and LM.
-
-If you would like to train a full system from scratch do the following:
-1- Train a tokenizer (see ../Tokenizer)
-2- Train a language model (see ../LM)
-3- Train the speech recognizer (with this code).
-
-
 Authors
- * Mirco Ravanelli 2020
- * Ju-Chieh Chou 2020
- * Abdel Heba 2020
- * Peter Plantinga 2020
- * Samuele Cornell 2020
+ * Anand Umashankar 2021
+
 """
 
-import sys
-import torch
-import shutil
+import json
 import logging
 import pathlib
-import torchaudio
+import shutil
+import sys
+
 import speechbrain as sb
+import torch
+import torchaudio
+import webdataset as wds
 from hyperpyyaml import load_hyperpyyaml
+
 from bizspeech_prepare import prepare_bizspeech_speechbrain
 
 logger = logging.getLogger(__name__)
@@ -252,7 +217,7 @@ def dataio_prepare(hparams):
     Returns:
     -------
     datasets : dict
-        Dictionary containing "train", "valid", and "test" keys that correspond
+        Dictionary containing "train", "val", and "test" keys that correspond
         to the DynamicItemDataset objects.
 
     """
@@ -342,7 +307,7 @@ def dataio_prepare(hparams):
     # Define datasets sorted by ascending lengths for efficiency
     datasets = {}
     data_folder = hparams["dataset"]["data_folder"]
-    for dataset in ["train", "valid", "test"]:
+    for dataset in ["train", "val", "test"]:
         datasets[dataset] = sb.dataio.dataset.DynamicItemDataset.from_json(
             json_path=hparams["dataset"][f"{dataset}_annotation"],
             replacements={"data_root": data_folder},
@@ -382,6 +347,49 @@ def dataio_prepare(hparams):
     return datasets
 
 
+def dataio_prepare_wds(hparams: dict):
+    def data_pipeline(sample_dict: dict):
+        # unpack sample
+        id = sample_dict["__key__"]
+        meta = sample_dict["meta.json"]
+        audio_tensor = sample_dict["wav.pyd"]
+
+        # determine what part of audio sample to use
+        audio_tensor = audio_tensor.squeeze()
+
+        txt = meta["txt"]
+        tokens_list = hparams["tokenizer"].encode_as_ids(txt)
+        tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
+        tokens_eos = torch.LongTensor(tokens_list + [hparams["eos_index"]])
+        tokens = torch.LongTensor(tokens_list)
+
+        return {
+            "id": id,
+            "sig": audio_tensor,
+            "words": txt,
+            "tokens_list": tokens_list,
+            "tokens_bos": tokens_bos,
+            "tokens_eos": tokens_eos,
+            "tokens": tokens
+        }
+
+    datasets = {}
+    data_folder = hparams["dataset"]["local_dataset_folder"]
+    for dataset in ["train", "val", "test"]:
+        with open(data_folder + "/" + dataset + ".json") as f:
+            length_of_set = len(json.load(f))
+        print([str(f) for f in sorted(pathlib.Path(data_folder).glob(
+            dataset + "_shard-*.tar*"))])
+        if dataset == "train":
+            train_shard_count = len([str(f) for f in sorted(
+                pathlib.Path(data_folder).glob(dataset + "_shard-*.tar*"))])
+        datasets[dataset] = wds.WebDataset([str(f) for f in sorted(pathlib.Path(data_folder).glob(
+            dataset + "_shard-*.tar*"))], length=length_of_set).shuffle(1000).decode("pil").map(data_pipeline)
+        logger.info(f"{dataset}ing data consist of {length_of_set} samples")
+
+    return datasets, train_shard_count
+
+
 if __name__ == "__main__":
 
     # Reading command line arguments
@@ -408,8 +416,14 @@ if __name__ == "__main__":
             "hparams": hparams["dataset"]
         })
 
-    # We can now directly create the datasets for training, valid, and test
-    datasets = dataio_prepare(hparams)
+    # We can now directly create the datasets for training, val, and test
+    if hparams["dataset"]["use_wds"]:
+        datasets, train_shard_count = dataio_prepare_wds(hparams)
+        hparams["train_dataloader_opts"]["num_workers"] = train_shard_count
+        hparams["valid_dataloader_opts"]["num_workers"] = 1
+        hparams["test_dataloader_opts"]["num_workers"] = 1
+    else:
+        datasets = dataio_prepare(hparams)
     sb.utils.distributed.run_on_main(hparams["pretrainer"].collect_files)
     hparams["pretrainer"].load_collected(device=run_opts["device"])
 
@@ -421,7 +435,9 @@ if __name__ == "__main__":
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
     )
-
+    hparams['train_dataloader_opts']['collate_fn'] = sb.dataio.batch.PaddedBatch
+    hparams['valid_dataloader_opts']['collate_fn'] = sb.dataio.batch.PaddedBatch
+    hparams['test_dataloader_opts']['collate_fn'] = sb.dataio.batch.PaddedBatch
     # The `fit()` method iterates the training loop, calling the methods
     # necessary to update the parameters of the model. Since all objects
     # with changing state are managed by the Checkpointer, training can be
@@ -429,7 +445,7 @@ if __name__ == "__main__":
     asr_brain.fit(
         asr_brain.hparams.epoch_counter,
         datasets["train"],
-        datasets["valid"],
+        datasets["val"],
         train_loader_kwargs=hparams["train_dataloader_opts"],
         valid_loader_kwargs=hparams["valid_dataloader_opts"],
     )
