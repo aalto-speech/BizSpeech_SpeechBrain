@@ -1,5 +1,5 @@
 # Seed needs to be set at top of yaml, before objects with parameters are instantiated
-seed: 69420
+seed: 69423
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
 
 # Path where data manifest files will be stored
@@ -9,7 +9,8 @@ test_annotation: !ref <local_dataset_folder>/train.json
 
 # Webdataset Parameters
 use_wds: True
-shard_maxcount: 10000
+number_of_shards: 8
+#shard_maxcount: 10000
 
 # Scratch or local Storage
 copy_to_local: True
@@ -22,8 +23,8 @@ preprocess_audio: !new:speechbrain.dataio.preprocess.AudioNormalizer
     mix: avg-to-mono
 
 # Set up folders for reading from and writing to
-data_folder: /m/triton/scratch/biz/bizspeech/MEDIA # data folder of BizSpeech
-hours_reqd: 100
+data_folder: /scratch/biz/bizspeech/MEDIA # data folder of BizSpeech
+hours_reqd: 225
 nonnative: 0.5
 qna: 0.5
 sorting: ascending
@@ -31,7 +32,7 @@ non_CEO_utt: False
 strict_included: True
 utterance_duration_limit: 10 # in seconds
 audio_filetype: wav
-trainValTest: (0.8, 0.1) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
+trainValTest: (0.9, 0.05) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
 output_format: json # Other option being csv
 exclude_event_json: metadata/exclude_event_list.json # or use null to include all (may lead to errors)
 include_event_json: metadata/cloudasr_testset_lists.json # or use null to include all
@@ -40,3 +41,4 @@ local_dataset_folder: !ref <output_folder>/datasets # data folder of BizSpeech
 wer_file: !ref <output_folder>/wer.txt
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
+

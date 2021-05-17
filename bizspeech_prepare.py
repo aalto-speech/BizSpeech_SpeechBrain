@@ -9,13 +9,14 @@ import logging
 import pathlib
 import shutil
 import sys
+from multiprocessing import Process
 
 import numpy as np
 import speechbrain as sb
 import torchaudio
+import tqdm
 import webdataset as wds
 from hyperpyyaml import load_hyperpyyaml
-from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -132,41 +133,6 @@ class create_DataSet:
             # No sorting required
             pass
 
-    def load_audio(self, audio: str, start: str, end: str, copy_to_local: bool, local_dest_dir: str, audio_filetype: str, preprocess_audio):
-        """Load the audio signal.
-
-        Args:
-            audio (str): Filepath of the audio file
-            start (str): Start timestamp of the audio utterance
-            end (str): End timestamp of the audio utterance
-            copy_to_local (bool): [description]
-            local_dest_dir (str): [description]
-            audio_filetype (str): [description]
-            preprocess_audio ([type]): [description]
-
-        Returns:
-            sig: Audio signal cropped and preprocessed.
-        """
-
-        if copy_to_local:
-            event_id = str(pathlib.Path(audio).resolve().parent).split("/")[-1]
-            dest_dir = pathlib.Path(
-                local_dest_dir).resolve().joinpath(event_id)
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            dest_dir = dest_dir.joinpath("recording." + audio_filetype)
-            if not dest_dir.is_file():
-                audio = shutil.copy(audio, dest_dir)
-
-        metadata = torchaudio.info(audio)
-        start = int(time_str_to_seconds(start) * metadata.sample_rate)
-        end = int(time_str_to_seconds(end) * metadata.sample_rate)
-        num_frames = end - start
-        audio, fs = torchaudio.load(
-            audio, num_frames=num_frames, frame_offset=start)
-        audio = audio.transpose(0, 1)
-        sig = preprocess_audio(audio, metadata.sample_rate)
-        return sig
-
     def load_Bizspeech_metadata(self):
         """Load Metadata from json file. Returns dictionary with eventID as key."""
         with open('metadata/BizSpeech_MetaData.json', 'r') as fh:
@@ -224,32 +190,95 @@ class create_DataSet:
             items.append(new_dict)
         pd.DataFrame(items).to_csv(filepath + "/test.csv", index=False, columns=[
             "utterance_ID", "category", "start", "end", "spkID", "txt"])
+    def load_audio(self, audio: str, start: str, end: str, copy_to_local: bool, local_dest_dir: str, audio_filetype: str, preprocess_audio):
+        """Load the audio signal.
 
-    def json_to_webdataset_tar(self, dataset: str, dataset_dir: str, shard_maxcount: int, copy_to_local: bool, local_dest_dir: str, audio_filetype: str, preprocess_audio):
+        Args:
+            audio (str): Filepath of the audio file
+            start (str): Start timestamp of the audio utterance
+            end (str): End timestamp of the audio utterance
+            copy_to_local (bool): [description]
+            local_dest_dir (str): [description]
+            audio_filetype (str): [description]
+            preprocess_audio ([type]): [description]
+
+        Returns:
+            sig: Audio signal cropped and preprocessed.
+        """
+
+        if copy_to_local:
+            event_id = str(pathlib.Path(audio).resolve().parent).split("/")[-1]
+            dest_dir = pathlib.Path(
+                local_dest_dir).resolve().joinpath(event_id)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_dir = dest_dir.joinpath("recording." + audio_filetype)
+            if not dest_dir.is_file():
+                audio = shutil.copy(audio, dest_dir)
+
+        metadata = torchaudio.info(audio)
+        start = int(time_str_to_seconds(start) * metadata.sample_rate)
+        end = int(time_str_to_seconds(end) * metadata.sample_rate)
+        num_frames = end - start
+        audio, fs = torchaudio.load(
+            audio, num_frames=num_frames, frame_offset=start)
+        audio = audio.transpose(0, 1)
+        sig = preprocess_audio(audio, metadata.sample_rate)
+        return sig
+
+    def json_to_webdataset_tar(self, dataset: str, dataset_dir: str, number_of_shards: int, copy_to_local: bool, local_dest_dir: str, audio_filetype: str, preprocess_audio):
         """Convert dict input to webdataset tar format.
 
         Args:
             dataset_dict (dict): Dictionary with the dataset parameters 
             hparams (dict): Hyperparameters dictionary loaded from YAML
         """
-        dataset_dict = self.split_dicts[dataset]
+        def writeTar(fname, dataset_dict):
+            with wds.TarWriter(fname) as sink:
+                for audio_utt in dataset_dict:
+                    sig = self.load_audio(audio=dataset_dict[audio_utt]["audio"], start=dataset_dict[audio_utt]["start"], end=dataset_dict[audio_utt]["end"],
+                                        copy_to_local=copy_to_local, local_dest_dir=local_dest_dir, audio_filetype=audio_filetype, preprocess_audio=preprocess_audio)
+                    sample = {
+                        "__key__": audio_utt,
+                        "wav.pyd": sig,
+                        "meta.json": {
+                            "speaker_id": dataset_dict[audio_utt]["spkID"],
+                            "category": dataset_dict[audio_utt]["category"],
+                            "utterance_id": audio_utt,
+                            "txt": dataset_dict[audio_utt]["txt"],
+                        },
+                    }
+                    sink.write(sample)
 
+        dataset_dict = self.split_dicts[dataset]
         pattern = str(dataset_dir + "/" + dataset + "_shard" + "-%06d.tar")
-        with wds.ShardWriter(pattern, maxcount=shard_maxcount) as sink:
-            for audio_utt in tqdm(dataset_dict):
-                sig = self.load_audio(audio=dataset_dict[audio_utt]["audio"], start=dataset_dict[audio_utt]["start"], end=dataset_dict[audio_utt]["end"],
-                                      copy_to_local=copy_to_local, local_dest_dir=local_dest_dir, audio_filetype=audio_filetype, preprocess_audio=preprocess_audio)
-                sample = {
-                    "__key__": audio_utt,
-                    "wav.pyd": sig,
-                    "meta.json": {
-                        "speaker_id": dataset_dict[audio_utt]["spkID"],
-                        "category": dataset_dict[audio_utt]["category"],
-                        "utterance_id": audio_utt,
-                        "txt": dataset_dict[audio_utt]["txt"],
-                    },
-                }
-                sink.write(sample)
+
+        if dataset == "train":
+            shard_name_list = [pattern % i for i in range(number_of_shards)]
+            per_shard = int(len(dataset_dict)/number_of_shards)
+            split_indices = [(i+1)*per_shard for i in range(number_of_shards-1) ] + [len(dataset_dict)]
+            dataset_keys_splits = [list(a) for a in np.split(
+                np.array(list(dataset_dict.keys())), split_indices)]
+            dataset_values_splits = [[dataset_dict[key] for key in dataset_keys_split]
+                                     for dataset_keys_split in dataset_keys_splits]
+            dataset_dict_splits = [{dataset_keys_splits[i][j]: dataset_values_splits[i][j] for j in range(
+                len(dataset_keys_splits[i]))} for i in range(len(dataset_keys_splits))]
+            #p = Pool(cpu_count() - 1)
+            #print(tuple(zip(shard_name_list, dataset_dict_splits)))
+            #r = list(p.imap(writeTar, tuple(zip(shard_name_list, dataset_dict_splits))))
+            #r.join()
+            
+            jobs = []
+            for i in range(number_of_shards):
+                jobs.append(Process(target=writeTar,args=(shard_name_list[i], dataset_dict_splits[i])))
+            for j in jobs:
+                j.start()
+            for j in jobs:
+                j.join()
+            
+            print("Completed tar generation")
+            #Parallel(n_jobs=number_of_shards)(delayed(writeTar)(shard_name_list[i], dataset_dict_splits[i]) for i in range(number_of_shards))
+        else:
+            writeTar(pattern % 0, dataset_dict)
 
     def dataset_compile_from_event_list(self, event_list):
         """Iterate over given event list and create the dataset dictionary based on data from TimeAligned Transcript.
@@ -272,27 +301,28 @@ class create_DataSet:
                 if row["SpeakerID"] == ceo or self.non_CEO_utt:
                     category_with_session = category + row["Session"]
                     if self.duration_dict_progress[category_with_session] < self.duration_dict_limit[category_with_session]:
-                        sentence_ID = row["SentenceID"]
-                        utterance_ID = event + "-" + sentence_ID
-                        utterance_end_time = transcript[i +
-                                                        1]["SentenceTimeGen"]
-                        end_time_in_secs = time_str_to_seconds(
-                            utterance_end_time)
-                        start_time_in_secs = time_str_to_seconds(
-                            row["SentenceTimeGen"])
-                        duration = int(
-                            (end_time_in_secs - start_time_in_secs) * 1000)
-                        if int(duration / 1000) < self.utterance_duration_limit:
-                            self.dataset_dict[utterance_ID] = {
-                                "audio": self.dataPath + "/" + event + "/recording." + self.audio_filetype,
-                                "start": row["SentenceTimeGen"],
-                                "end": utterance_end_time,
-                                "duration": duration,
-                                "spkID": row["SpeakerID"],
-                                "txt": row["Sentence"],
-                                "category": category_with_session
-                            }
-                            self.duration_dict_progress[category_with_session] += duration
+                        if row["Sentence"] != "":
+                            sentence_ID = row["SentenceID"]
+                            utterance_ID = event + "-" + sentence_ID
+                            utterance_end_time = transcript[i +
+                                                            1]["SentenceTimeGen"]
+                            end_time_in_secs = time_str_to_seconds(
+                                utterance_end_time)
+                            start_time_in_secs = time_str_to_seconds(
+                                row["SentenceTimeGen"])
+                            duration = int(
+                                (end_time_in_secs - start_time_in_secs) * 1000)
+                            if int(duration / 1000) < self.utterance_duration_limit:
+                                self.dataset_dict[utterance_ID] = {
+                                    "audio": self.dataPath + "/" + event + "/recording." + self.audio_filetype,
+                                    "start": row["SentenceTimeGen"],
+                                    "end": utterance_end_time,
+                                    "duration": duration,
+                                    "spkID": row["SpeakerID"],
+                                    "txt": row["Sentence"],
+                                    "category": category_with_session
+                                }
+                                self.duration_dict_progress[category_with_session] += duration
             if i % 100 == 0:
                 print("Dataset Creation Progress")
                 progress_complete = True
@@ -341,11 +371,11 @@ def prepare_bizspeech_speechbrain(hparams: dict):
         logger.info(
             f'Created JSON dataset files under {hparams["local_dataset_folder"]} directory.')
         if hparams["use_wds"]:
-            datasetObj.json_to_webdataset_tar("train", hparams["local_dataset_folder"], hparams["shard_maxcount"],
+            datasetObj.json_to_webdataset_tar("train", hparams["local_dataset_folder"], hparams["number_of_shards"],
                                               hparams["copy_to_local"], hparams["local_dest_dir"], hparams["audio_filetype"], hparams["preprocess_audio"])
-            datasetObj.json_to_webdataset_tar("val", hparams["local_dataset_folder"], hparams["shard_maxcount"],
+            datasetObj.json_to_webdataset_tar("val", hparams["local_dataset_folder"], hparams["number_of_shards"],
                                               hparams["copy_to_local"], hparams["local_dest_dir"], hparams["audio_filetype"], hparams["preprocess_audio"])
-            datasetObj.json_to_webdataset_tar("test", hparams["local_dataset_folder"], hparams["shard_maxcount"],
+            datasetObj.json_to_webdataset_tar("test", hparams["local_dataset_folder"], hparams["number_of_shards"],
                                               hparams["copy_to_local"], hparams["local_dest_dir"], hparams["audio_filetype"], hparams["preprocess_audio"])
     else:
         datasetObj.parse_to_csv(hparams["local_dataset_folder"])

@@ -24,9 +24,9 @@ train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
 wer_file: !ref <dataset[output_folder]>/wer.txt
 
 # Training parameters
-number_of_epochs: 100
+number_of_epochs: 30
 number_of_ctc_epochs: 0
-batch_size: 4
+batch_size: 8
 lr: 1.0
 ctc_weight: 0.5
 ckpt_interval_minutes: 15 # save checkpoint every N min

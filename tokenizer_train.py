@@ -8,7 +8,6 @@ the same tokenizer. Otherwise, a token mismatch is introduced
 and beamsearch will produce bad results when combining AM and LM.
 """
 import sys
-import pathlib
 import logging
 import speechbrain as sb
 from hyperpyyaml import load_hyperpyyaml
