@@ -1,13 +1,16 @@
 dataset: !include:dataset.yaml
 tokenizer_params: !include:tokenizer.yaml
 
+train_WER_required: False
+wer_file: !ref <dataset[output_folder]>/wer.txt
+train_log: !ref <dataset[output_folder]>/train_log.txt
 
 tokenizer: !new:sentencepiece.SentencePieceProcessor
+
 # The pretrainer allows a mapping between pretrained files and instances that
 # are declared in the yaml. E.g here, we will download the file lm.ckpt
 # and it will be loaded into "lm" which is pointing to the <lm_model> defined
 # before.
-pretrained_path: speechbrain/asr-crdnn-rnnlm-librispeech
 pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
    collect_in: !ref <dataset[save_folder]>
    loadables:
@@ -15,33 +18,40 @@ pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
       #model: !ref <model>
    paths:
       tokenizer: !ref <dataset[save_folder]>/<tokenizer_params[token_output]>_<tokenizer_params[token_type]>.model
-      #model: !ref <pretrained_path>/asr.ckpt
+
 
 # The train logger writes training statistics to a file, as well as stdout.
 train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
-    save_file: !ref <dataset[train_log]>
+    save_file: !ref <train_log>
 
-wer_file: !ref <dataset[output_folder]>/wer.txt
 
 # Training parameters
-number_of_epochs: 30
+number_of_epochs: 80
 number_of_ctc_epochs: 0
 batch_size: 8
-lr: 1.0
+lr: 0.3
 ctc_weight: 0.5
 ckpt_interval_minutes: 15 # save checkpoint every N min
 label_smoothing: 0.1
 
 # Dataloader options
-train_dataloader_opts:
-    batch_size: !ref <batch_size>
+train_dataloader_opts:    
+    batch_size: null
     num_workers: !ref <batch_size>
 valid_dataloader_opts:
-    batch_size: !ref <batch_size>
+    batch_size: null
     num_workers: !ref <batch_size>
 test_dataloader_opts:
-    batch_size: !ref <batch_size>
+    batch_size: null
     num_workers: !ref <batch_size>
+
+use_dynamic_batch_size: True
+looped_nominal_epoch: 2000
+dynamic_batch_kwargs:  # These are used for the training data.
+    len_key: "sig"
+    sampler_kwargs:
+        target_batch_numel: 2880000  # 180s
+        max_batch_numel: 3840000 #240s
 
 
 # Feature parameters

@@ -1,6 +1,11 @@
 # Seed needs to be set at top of yaml, before objects with parameters are instantiated
-seed: 69423
+seed: 98551
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
+dataset_seed: 2001010
+
+output_folder: !ref runs/<seed>
+save_folder: !ref <output_folder>/save
+local_dataset_folder: !ref /scratch/biz/bizspeech/ASR_Datasets/<dataset_seed>/datasets 
 
 # Path where data manifest files will be stored
 train_annotation: !ref <local_dataset_folder>/train.json
@@ -9,12 +14,12 @@ test_annotation: !ref <local_dataset_folder>/train.json
 
 # Webdataset Parameters
 use_wds: True
-number_of_shards: 8
+number_of_shards: 16
 #shard_maxcount: 10000
 
 # Scratch or local Storage
-copy_to_local: True
-local_dest_dir: /tmp/data_dir
+copy_to_local: False
+local_dest_dir: !ref /tmp/data_dir/<dataset_seed>
 
 # Audio Resampling and convert to single channel
 sample_rate: 16000
@@ -24,21 +29,15 @@ preprocess_audio: !new:speechbrain.dataio.preprocess.AudioNormalizer
 
 # Set up folders for reading from and writing to
 data_folder: /scratch/biz/bizspeech/MEDIA # data folder of BizSpeech
-hours_reqd: 225
-nonnative: 0.5
+hours_reqd: 220
+nonnative: 0.3
 qna: 0.5
 sorting: ascending
 non_CEO_utt: False
-strict_included: True
-utterance_duration_limit: 10 # in seconds
+strict_included: False
+utterance_duration_limit: 20 # in seconds
 audio_filetype: wav
-trainValTest: (0.9, 0.05) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
-output_format: json # Other option being csv
+trainValTest: (0.91, 0.045) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
 exclude_event_json: metadata/exclude_event_list.json # or use null to include all (may lead to errors)
 include_event_json: metadata/cloudasr_testset_lists.json # or use null to include all
-output_folder: !ref runs/<seed>
-local_dataset_folder: !ref <output_folder>/datasets # data folder of BizSpeech
-wer_file: !ref <output_folder>/wer.txt
-save_folder: !ref <output_folder>/save
-train_log: !ref <output_folder>/train_log.txt
 
