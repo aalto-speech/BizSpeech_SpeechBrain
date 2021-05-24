@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=newseed_bizspeech_train
+#SBATCH --job-name=wds_biz
 #SBATCH -p dgx-spa
 #SBATCH -c 16
 #SBATCH --time=50:00:00

@@ -72,7 +72,8 @@ class ASR(sb.Brain):
         # Output layer for seq2seq log-probabilities
         logits = self.modules.seq_lin(h)
         p_seq = self.hparams.log_softmax(logits)
-        p_tokens, scores = self.hparams.valid_search(x, wav_lens)
+        if self.hparams.train_WER_required:
+            p_tokens, scores = self.hparams.valid_search(x, wav_lens)
         # Compute outputs
         if stage == sb.Stage.TRAIN:
             current_epoch = self.hparams.epoch_counter.current
@@ -80,13 +81,18 @@ class ASR(sb.Brain):
                 # Output layer for ctc log-probabilities
                 ctc_logits = self.modules.ctc_lin(x)
                 p_ctc = self.hparams.log_softmax(ctc_logits)
-                return p_ctc, p_seq, wav_lens, p_tokens
+                if self.hparams.train_WER_required:
+                    return p_ctc, p_seq, wav_lens, p_tokens
+                else:
+                    return p_ctc, p_seq, wav_lens
             else:
-                return p_seq, wav_lens, p_tokens
+                if self.hparams.train_WER_required:
+                    return p_seq, wav_lens, p_tokens
+                else:
+                    return p_seq, wav_lens
         else:
-            if stage == sb.Stage.VALID:
-                pass
-                # p_tokens, scores = self.hparams.valid_search(x, wav_lens)
+            if stage == sb.Stage.VALID and not self.hparams.train_WER_required:
+                p_tokens, scores = self.hparams.valid_search(x, wav_lens)
             else:
                 p_tokens, scores = self.hparams.test_search(x, wav_lens)
             return p_seq, wav_lens, p_tokens
@@ -96,9 +102,15 @@ class ASR(sb.Brain):
         current_epoch = self.hparams.epoch_counter.current
         if stage == sb.Stage.TRAIN:
             if current_epoch <= self.hparams.number_of_ctc_epochs:
-                p_ctc, p_seq, wav_lens, predicted_tokens = predictions
+                if self.hparams.train_WER_required:
+                    p_ctc, p_seq, wav_lens, predicted_tokens = predictions
+                else:
+                    p_ctc, p_seq, wav_lens = predictions
             else:
-                p_seq, wav_lens, predicted_tokens = predictions
+                if self.hparams.train_WER_required:
+                    p_seq, wav_lens, predicted_tokens = predictions
+                else:
+                    p_seq, wav_lens = predictions
         else:
             p_seq, wav_lens, predicted_tokens = predictions
 
@@ -136,14 +148,21 @@ class ASR(sb.Brain):
             loss += (1 - self.hparams.ctc_weight) * loss_seq
         else:
             loss = loss_seq
-        # Decode token terms to words
-        predicted_words = [
-            self.hparams.tokenizer.decode_ids(utt_seq).split(" ")
-            for utt_seq in predicted_tokens
-        ]
-        target_words = [wrd.split(" ") for wrd in batch.words]
-        self.wer_metric.append(ids, predicted_words, target_words)
+
+        if stage == sb.Stage.TRAIN and self.hparams.train_WER_required:
+            predicted_words = [
+                self.hparams.tokenizer.decode_ids(utt_seq).split(" ")
+                for utt_seq in predicted_tokens
+            ]
+            target_words = [wrd.split(" ") for wrd in batch.words]
+            self.wer_metric.append(ids, predicted_words, target_words)
         if stage != sb.Stage.TRAIN:
+            predicted_words = [
+                self.hparams.tokenizer.decode_ids(utt_seq).split(" ")
+                for utt_seq in predicted_tokens
+            ]
+            target_words = [wrd.split(" ") for wrd in batch.words]
+            self.wer_metric.append(ids, predicted_words, target_words)
             self.cer_metric.append(ids, predicted_words, target_words)
 
         return loss
@@ -167,18 +186,22 @@ class ASR(sb.Brain):
 
     def on_stage_start(self, stage, epoch):
         """Run at the beginning of each epoch."""
-        self.wer_metric = self.hparams.error_rate_computer()
+        if stage == sb.Stage.TRAIN and self.hparams.train_WER_required:
+            self.wer_metric = self.hparams.error_rate_computer()
         if stage != sb.Stage.TRAIN:
+            self.wer_metric = self.hparams.error_rate_computer()
             self.cer_metric = self.hparams.cer_computer()
 
     def on_stage_end(self, stage, stage_loss, epoch):
         """Run at the end of a epoch."""
         # Compute/store important stats
         stage_stats = {"loss": stage_loss}
-        stage_stats["WER"] = self.wer_metric.summarize("error_rate")
         if stage == sb.Stage.TRAIN:
             self.train_stats = stage_stats
+            if self.hparams.train_WER_required:
+                stage_stats["WER"] = self.wer_metric.summarize("error_rate")
         else:
+            stage_stats["WER"] = self.wer_metric.summarize("error_rate")
             stage_stats["CER"] = self.cer_metric.summarize("error_rate")
 
         # Perform end-of-iteration things, like annealing, logging, etc.
@@ -349,23 +372,17 @@ def dataio_prepare(hparams):
 
 def dataio_prepare_wds(hparams: dict):
     def data_pipeline(sample_dict: dict):
-        # unpack sample
-        id = sample_dict["__key__"]
-        meta = sample_dict["meta.json"]
-        audio_tensor = sample_dict["wav.pyd"]
+        #audio_tensor = audio_tensor.squeeze()
 
-        # determine what part of audio sample to use
-        audio_tensor = audio_tensor.squeeze()
-
-        txt = meta["txt"]
+        txt = sample_dict["meta"]["txt"]
         tokens_list = hparams["tokenizer"].encode_as_ids(txt)
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
         tokens_eos = torch.LongTensor(tokens_list + [hparams["eos_index"]])
         tokens = torch.LongTensor(tokens_list)
 
         return {
-            "id": id,
-            "sig": audio_tensor,
+            "id": sample_dict["id"],
+            "sig": sample_dict["audio_tensor"],
             "words": txt,
             "tokens_list": tokens_list,
             "tokens_bos": tokens_bos,
@@ -374,17 +391,60 @@ def dataio_prepare_wds(hparams: dict):
         }
 
     datasets = {}
-    data_folder = hparams["dataset"]["local_dataset_folder"]
+    if hparams["dataset"]["copy_to_local"]:
+        data_folder = hparams["dataset"]["local_dest_dir"]
+    else:
+        data_folder = hparams["dataset"]["local_dataset_folder"]
     for dataset in ["train", "val", "test"]:
-        with open(data_folder + "/" + dataset + ".json") as f:
+        with open(hparams["dataset"]["local_dataset_folder"] + "/" + dataset + ".json") as f:
             length_of_set = len(json.load(f))
-        print([str(f) for f in sorted(pathlib.Path(data_folder).glob(
-            dataset + "_shard-*.tar*"))])
         if dataset == "train":
             train_shard_count = len([str(f) for f in sorted(
                 pathlib.Path(data_folder).glob(dataset + "_shard-*.tar*"))])
-        datasets[dataset] = wds.WebDataset([str(f) for f in sorted(pathlib.Path(data_folder).glob(
-            dataset + "_shard-*.tar*"))], length=length_of_set).shuffle(1000).decode("pil").map(data_pipeline)
+            if hparams["use_dynamic_batch_size"]:
+                datasets[dataset] = (
+                    wds.WebDataset(
+                    [str(f) for f in sorted(pathlib.Path(data_folder).glob(dataset + "_shard-*.tar*"))], length=length_of_set)
+                    .decode()
+                    .rename(id="__key__", audio_tensor="wav.pyd", meta="meta.json")
+                    .map(data_pipeline)
+                    .then(
+                        sb.dataio.iterators.dynamic_bucketed_batch,
+                        **hparams["dynamic_batch_kwargs"],
+                        #wds.iterators.batched,
+                        #batchsize=hparams["batch_size"],
+                        #collation_fn=sb.dataio.batch.PaddedBatch,
+                        #partial=True
+                    )
+                )
+            else:
+                datasets[dataset] = (
+                    wds.WebDataset(
+                    [str(f) for f in sorted(pathlib.Path(data_folder).glob(dataset + "_shard-*.tar*"))], length=length_of_set)
+                    .decode()
+                    .rename(id="__key__", audio_tensor="wav.pyd", meta="meta.json")
+                    .map(data_pipeline)
+                    .then(
+                        wds.iterators.batched,
+                        batchsize=hparams["batch_size"],
+                        collation_fn=sb.dataio.batch.PaddedBatch,
+                        partial=True
+                    )
+                )   
+        else:
+            datasets[dataset] = (
+                wds.WebDataset(
+                [str(f) for f in sorted(pathlib.Path(data_folder).glob(dataset + "_shard-*.tar*"))], length=length_of_set)
+                .decode()
+                .rename(id="__key__", audio_tensor="wav.pyd", meta="meta.json")
+                .map(data_pipeline)
+                .then(
+                    wds.iterators.batched,
+                    batchsize=hparams["batch_size"],
+                    collation_fn=sb.dataio.batch.PaddedBatch,
+                    partial=True
+                )
+            )
         logger.info(f"{dataset}ing data consist of {length_of_set} samples")
 
     return datasets, train_shard_count
@@ -435,9 +495,13 @@ if __name__ == "__main__":
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
     )
-    hparams['train_dataloader_opts']['collate_fn'] = sb.dataio.batch.PaddedBatch
-    hparams['valid_dataloader_opts']['collate_fn'] = sb.dataio.batch.PaddedBatch
-    hparams['test_dataloader_opts']['collate_fn'] = sb.dataio.batch.PaddedBatch
+
+    if hparams["use_dynamic_batch_size"]:
+        hparams["train_dataloader_opts"]["looped_nominal_epoch"] = hparams["looped_nominal_epoch"]
+        datasets["train"] = asr_brain.make_dataloader(
+            datasets["train"], sb.Stage.TRAIN, **hparams["train_dataloader_opts"]
+        )
+        asr_brain.train_loader = datasets["train"]
     # The `fit()` method iterates the training loop, calling the methods
     # necessary to update the parameters of the model. Since all objects
     # with changing state are managed by the Checkpointer, training can be
