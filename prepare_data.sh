@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --job-name=200_biz
-#SBATCH --constraint hsw
 #SBATCH -N 1                 # on one node
 #SBATCH --time=12:00:00
 #SBATCH --mem-per-cpu=1GB

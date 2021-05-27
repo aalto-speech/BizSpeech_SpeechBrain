@@ -1,7 +1,7 @@
 # Seed needs to be set at top of yaml, before objects with parameters are instantiated
-seed: 98551
+seed: 97000
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
-dataset_seed: 2001010
+dataset_seed: 801010
 
 output_folder: !ref runs/<seed>
 save_folder: !ref <output_folder>/save
@@ -29,15 +29,15 @@ preprocess_audio: !new:speechbrain.dataio.preprocess.AudioNormalizer
 
 # Set up folders for reading from and writing to
 data_folder: /scratch/biz/bizspeech/MEDIA # data folder of BizSpeech
-hours_reqd: 220
+hours_reqd: 100
 nonnative: 0.3
-qna: 0.5
+qna: 0.6
 sorting: ascending
 non_CEO_utt: False
 strict_included: False
 utterance_duration_limit: 20 # in seconds
 audio_filetype: wav
-trainValTest: (0.91, 0.045) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
+trainValTest: (0.99, 0.005) # The specified are train and validation portions, 1-train_portion-val_portion is kept for test
 exclude_event_json: metadata/exclude_event_list.json # or use null to include all (may lead to errors)
 include_event_json: metadata/cloudasr_testset_lists.json # or use null to include all
 
