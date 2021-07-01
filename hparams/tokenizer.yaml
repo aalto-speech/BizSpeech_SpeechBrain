@@ -1,9 +1,8 @@
 dataset: !include:dataset.yaml
 
-
 # Tokenizer parameters
 token_type: bpe  # ["unigram", "bpe", "char"]
-token_output: 1000  # index(blank/eos/bos/unk) = 0
+token_output: 5000  # index(blank/eos/bos/unk) = 0
 character_coverage: 1.0
 annotation_read: txt # field to read
 

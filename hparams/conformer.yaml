@@ -21,7 +21,7 @@ train_log: !ref <dataset[output_folder]>/train_log.txt
 # Empirically, we found that this value should be >= 128.
 # Please, set your parameters accordingly.
 number_of_epochs: 200
-batch_size: 8 # This works for 2x GPUs with 32GB
+batch_size: 16 # This works for 2x GPUs with 32GB
 ctc_weight: 0.3
 gradient_accumulation: 4
 gradient_clipping: 5.0
@@ -55,8 +55,8 @@ dynamic_batch_kwargs:  # These are used for the training data.
     sampler_kwargs:
         target_batch_numel: 2880000  # 180s
         max_batch_numel: 3840000 #240s
-        
-        
+
+
 ####################### Model parameters ###########################
 # Transformer
 d_model: 768
@@ -107,7 +107,9 @@ Transformer: !new:speechbrain.lobes.models.transformer.TransformerASR.Transforme
     d_ffn: !ref <d_ffn>
     dropout: !ref <transformer_dropout>
     activation: !ref <activation>
-    normalize_before: False
+    encoder_module: conformer
+    attention_type: RelPosMHAXL
+    normalize_before: True
 
 # This is the TransformerLM that is used according to the Huggingface repository
 # Visit the HuggingFace model corresponding to the pretrained_lm_tokenizer_path
@@ -246,9 +248,10 @@ acc_computer: !name:speechbrain.utils.Accuracy.AccuracyStats
 # and it will be loaded into "lm" which is pointing to the <lm_model> defined
 # before.
 pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
-   collect_in: !ref <dataset[save_folder]>
-   loadables:
-      tokenizer: !ref <tokenizer>
-   paths:
-      tokenizer: !ref <dataset[save_folder]>/<tokenizer_params[token_output]>_<tokenizer_params[token_type]>.model
-
+    collect_in: !ref <dataset[save_folder]>
+    loadables:
+        #lm: !ref <lm_model>
+        tokenizer: !ref <tokenizer>
+    paths:
+        #lm: !ref <pretrained_lm_tokenizer_path>/lm.ckpt
+        tokenizer: !ref <dataset[save_folder]>/<tokenizer_params[token_output]>_<tokenizer_params[token_type]>.model

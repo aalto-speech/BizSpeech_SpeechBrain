@@ -213,11 +213,21 @@ class ASR(sb.Brain):
                 train_stats=self.train_stats,
                 valid_stats=stage_stats,
             )
+            self.hparams.tensorboard_logger.log_stats(
+                stats_meta={"epoch": epoch, "lr": old_lr},
+                train_stats=self.train_stats,
+                valid_stats=stage_stats,
+            )
             self.checkpointer.save_and_keep_only(
                 meta={"WER": stage_stats["WER"]}, min_keys=["WER"],
             )
         elif stage == sb.Stage.TEST:
             self.hparams.train_logger.log_stats(
+                stats_meta={
+                    "Epoch loaded": self.hparams.epoch_counter.current},
+                test_stats=stage_stats,
+            )
+            self.hparams.tensorboard_logger.log_stats(
                 stats_meta={
                     "Epoch loaded": self.hparams.epoch_counter.current},
                 test_stats=stage_stats,

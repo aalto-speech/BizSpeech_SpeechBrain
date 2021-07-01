@@ -4,9 +4,8 @@
 #SBATCH --time=50:00:00
 #SBATCH --gres=gpu:1
 #SBATCH --mem-per-cpu=4GB
+#SBATCH -p gpu-nvlink
 
-SBATCH --partition=gpu-nvlink
-SBATCH --account=dgx-spa
 module load cuda
 python tokenizer_train.py hparams/tokenizer.yaml
 python train_transformer.py hparams/transformer.yaml
