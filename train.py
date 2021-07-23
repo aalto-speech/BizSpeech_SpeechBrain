@@ -213,11 +213,12 @@ class ASR(sb.Brain):
                 train_stats=self.train_stats,
                 valid_stats=stage_stats,
             )
-            self.hparams.tensorboard_logger.log_stats(
-                stats_meta={"epoch": epoch, "lr": old_lr},
-                train_stats=self.train_stats,
-                valid_stats=stage_stats,
-            )
+            if self.hparams.log_to_tensorboard:
+                self.hparams.tensorboard_logger.log_stats(
+                    stats_meta={"epoch": epoch, "lr": old_lr},
+                    train_stats=self.train_stats,
+                    valid_stats=stage_stats,
+                )
             self.checkpointer.save_and_keep_only(
                 meta={"WER": stage_stats["WER"]}, min_keys=["WER"],
             )
@@ -227,11 +228,12 @@ class ASR(sb.Brain):
                     "Epoch loaded": self.hparams.epoch_counter.current},
                 test_stats=stage_stats,
             )
-            self.hparams.tensorboard_logger.log_stats(
-                stats_meta={
-                    "Epoch loaded": self.hparams.epoch_counter.current},
-                test_stats=stage_stats,
-            )
+            if self.hparams.log_to_tensorboard:
+                self.hparams.tensorboard_logger.log_stats(
+                    stats_meta={
+                        "Epoch loaded": self.hparams.epoch_counter.current},
+                    test_stats=stage_stats,
+                )
             with open(self.hparams.wer_file, "w") as w:
                 self.wer_metric.write_stats(w)
 
@@ -297,6 +299,7 @@ def dataio_prepare(hparams):
             start = int(time_str_to_seconds(start) * metadata.sample_rate)
             end = int(time_str_to_seconds(end) * metadata.sample_rate)
         num_frames = end - start
+        
         audio, fs = torchaudio.load(
             audio, num_frames=num_frames, frame_offset=start)
         # a = time.time()
@@ -382,8 +385,6 @@ def dataio_prepare(hparams):
 
 def dataio_prepare_wds(hparams: dict):
     def data_pipeline(sample_dict: dict):
-        #audio_tensor = audio_tensor.squeeze()
-
         txt = sample_dict["meta"]["txt"]
         tokens_list = hparams["tokenizer"].encode_as_ids(txt)
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
@@ -405,6 +406,7 @@ def dataio_prepare_wds(hparams: dict):
         data_folder = hparams["dataset"]["local_dest_dir"]
     else:
         data_folder = hparams["dataset"]["local_dataset_folder"]
+    shards_pattern = str(hparams["dataset"]["shardfiles_pattern"])
     for dataset in ["train", "val", "test"]:
         with open(hparams["dataset"]["local_dataset_folder"] + "/" + dataset + ".json") as f:
             length_of_set = len(json.load(f))
@@ -414,7 +416,8 @@ def dataio_prepare_wds(hparams: dict):
             if hparams["use_dynamic_batch_size"]:
                 datasets[dataset] = (
                     wds.WebDataset(
-                    [str(f) for f in sorted(pathlib.Path(data_folder).glob(dataset + "_shard-*.tar*"))], length=length_of_set)
+                    [shards_pattern % a for a in range(hparams["dataset"][dataset+"_shards"][0], hparams["dataset"][dataset+"_shards"][1])],
+                    length=length_of_set)
                     .decode()
                     .rename(id="__key__", audio_tensor="wav.pyd", meta="meta.json")
                     .map(data_pipeline)
@@ -430,7 +433,8 @@ def dataio_prepare_wds(hparams: dict):
             else:
                 datasets[dataset] = (
                     wds.WebDataset(
-                    [str(f) for f in sorted(pathlib.Path(data_folder).glob(dataset + "_shard-*.tar*"))], length=length_of_set)
+                    [shards_pattern % a for a in range(hparams["dataset"][dataset+"_shards"][0], hparams["dataset"][dataset+"_shards"][1])],
+                    length=length_of_set)
                     .decode()
                     .rename(id="__key__", audio_tensor="wav.pyd", meta="meta.json")
                     .map(data_pipeline)
@@ -444,7 +448,8 @@ def dataio_prepare_wds(hparams: dict):
         else:
             datasets[dataset] = (
                 wds.WebDataset(
-                [str(f) for f in sorted(pathlib.Path(data_folder).glob(dataset + "_shard-*.tar*"))], length=length_of_set)
+                [shards_pattern % a for a in range(hparams["dataset"][dataset+"_shards"][0], hparams["dataset"][dataset+"_shards"][1])],
+                length=length_of_set)
                 .decode()
                 .rename(id="__key__", audio_tensor="wav.pyd", meta="meta.json")
                 .map(data_pipeline)
@@ -489,7 +494,7 @@ if __name__ == "__main__":
     # We can now directly create the datasets for training, val, and test
     if hparams["dataset"]["use_wds"]:
         datasets, train_shard_count = dataio_prepare_wds(hparams)
-        hparams["train_dataloader_opts"]["num_workers"] = train_shard_count
+        hparams["train_dataloader_opts"]["num_workers"] = 20
         hparams["valid_dataloader_opts"]["num_workers"] = 1
         hparams["test_dataloader_opts"]["num_workers"] = 1
     else:

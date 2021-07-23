@@ -1,4 +1,4 @@
-dataset: !include:dataset.yaml
+dataset: !include:dataset_26000.yaml
 tokenizer_params: !include:tokenizer.yaml
 
 train_WER_required: False
@@ -26,8 +26,8 @@ train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
     save_file: !ref <train_log>
 
 log_to_tensorboard: True
-tensorboard_logger: !new:speechbrain.utils.train_logger.TensorboardLogger
-    save_dir: !ref <tensorboard_dir>
+#tensorboard_logger: !new:speechbrain.utils.train_logger.TensorboardLogger
+#    save_dir: !ref <tensorboard_dir>
 
 # Training parameters
 number_of_epochs: 200
@@ -105,8 +105,6 @@ temperature: 1.25
 # if it gets interrupted at any point.
 epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
     limit: !ref <number_of_epochs>
-
-
 
 # Feature extraction
 compute_features: !new:speechbrain.lobes.features.Fbank

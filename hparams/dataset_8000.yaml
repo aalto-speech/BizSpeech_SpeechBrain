@@ -1,5 +1,5 @@
 # Seed needs to be set at top of yaml, before objects with parameters are instantiated
-seed: 98579
+seed: 98580
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
 dataset_seed: 8000
 
@@ -14,13 +14,13 @@ test_annotation: !ref <local_dataset_folder>/train.json
 
 # Webdataset Parameters
 use_wds: True
-number_of_shards: 3000
-#shard_maxcount: 10000
-shardfiles_pattern: !ref <data_folder>/bizspeech_shard-%06d.tar.gz
+number_of_shards: 2500
+shardfiles_pattern: !ref <local_dataset_folder>/bizspeech_shard-%06d.tar.gz
 use_compression: True
 train_shards: (0, 2492)
 val_shards: (2492, 2496)
 test_shards: (2496, 2500)
+#shard_maxcount: 10000
 
 # Scratch or local Storage
 copy_to_local: False

@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=200_biz
+#SBATCH --time=120:00:00
+#SBATCH --mem-per-cpu=6GB
 #SBATCH -N 1                 # on one node
-#SBATCH --time=12:00:00
-#SBATCH --mem-per-cpu=1GB
 #SBATCH --exclusive
 
 module load cuda

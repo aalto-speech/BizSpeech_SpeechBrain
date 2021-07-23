@@ -9,7 +9,8 @@ import logging
 import pathlib
 import shutil
 import sys
-from multiprocessing import Process
+import multiprocessing
+#from multiprocessing import Process
 
 import numpy as np
 import speechbrain as sb
@@ -19,7 +20,7 @@ from hyperpyyaml import load_hyperpyyaml
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
-
+the_queue = multiprocessing.Queue()
 
 def time_str_to_seconds(time_str):
     """
@@ -68,11 +69,18 @@ class create_DataSet:
         totalDuration = hparams["hours_reqd"] * 60 * 60 * 1000
         nonnative = hparams["nonnative"]
         qna = hparams["qna"]
+        '''
         self.duration_dict_limit = {
             "nativepresentation": totalDuration * (1 - nonnative) * (1 - qna),
             "nonnativepresentation": totalDuration * nonnative * (1 - qna),
             "nativeq-and-a": totalDuration * (1 - nonnative) * qna,
             "nonnativeq-and-a": totalDuration * nonnative * qna
+        }'''
+        self.duration_dict_limit = {
+            "nativepresentation": totalDuration,
+            "nonnativepresentation": totalDuration,
+            "nativeq-and-a": totalDuration,
+            "nonnativeq-and-a": totalDuration
         }
         self.duration_dict_progress = {"nativepresentation": 0,
                                        "nonnativepresentation": 0,
@@ -189,32 +197,40 @@ class create_DataSet:
         sig = preprocess_audio(audio, metadata.sample_rate)
         return sig
 
-    def json_to_webdataset_tar(self, dataset: str, dataset_dir: str, number_of_shards: int, preprocess_audio):
+    def json_to_webdataset_tar(self, dataset: str, dataset_dir: str, number_of_shards: int, use_compression:bool, preprocess_audio):
         """Convert dict input to webdataset tar format.
 
         Args:
             dataset_dict (dict): Dictionary with the dataset parameters 
             hparams (dict): Hyperparameters dictionary loaded from YAML
         """
-        def writeTar(fname, dataset_dict):
-            with wds.TarWriter(fname) as sink:
-                for audio_utt in dataset_dict:
-                    sig = self.load_audio(audio=dataset_dict[audio_utt]["audio"], start=dataset_dict[audio_utt]
-                                          ["start"], end=dataset_dict[audio_utt]["end"], preprocess_audio=preprocess_audio)
-                    sample = {
-                        "__key__": audio_utt,
-                        "wav.pyd": sig,
-                        "meta.json": {
-                            "speaker_id": dataset_dict[audio_utt]["spkID"],
-                            "category": dataset_dict[audio_utt]["category"],
-                            "utterance_id": audio_utt,
-                            "txt": dataset_dict[audio_utt]["txt"],
-                        },
-                    }
-                    sink.write(sample)
+        def writeTar(queue):
+            while True:
+                fname, dataset_dict = queue.get(True)
+                if fname is None:
+                    break
+                logger.info("Writing " + str(fname) + ".")
+                with wds.TarWriter(fname, compress=use_compression) as sink:
+                    for audio_utt in dataset_dict:
+                        sig = self.load_audio(audio=dataset_dict[audio_utt]["audio"], start=dataset_dict[audio_utt]
+                                                ["start"], end=dataset_dict[audio_utt]["end"], preprocess_audio=preprocess_audio)
+                        sample = {
+                            "__key__": audio_utt,
+                            "wav.pyd": sig,
+                            "meta.json": {
+                                "speaker_id": dataset_dict[audio_utt]["spkID"],
+                                "category": dataset_dict[audio_utt]["category"],
+                                "utterance_id": audio_utt,
+                                "txt": dataset_dict[audio_utt]["txt"],
+                            },
+                        }
+                        sink.write(sample)
 
         dataset_dict = self.split_dicts[dataset]
-        pattern = str(dataset_dir + "/" + dataset + "_shard" + "-%06d.tar")
+        if use_compression:
+            pattern = str(dataset_dir + "/" + "bizspeech_shard" + "-%06d.tar.gz")
+        else:
+            pattern = str(dataset_dir + "/" + dataset + "_shard" + "-%06d.tar")
 
         if dataset == "train":
             shard_name_list = [pattern % i for i in range(number_of_shards)]
@@ -231,16 +247,26 @@ class create_DataSet:
             #print(tuple(zip(shard_name_list, dataset_dict_splits)))
             #r = list(p.imap(writeTar, tuple(zip(shard_name_list, dataset_dict_splits))))
             # r.join()
-
-            jobs = []
+            logger.info("The node has " + str(multiprocessing.cpu_count()) + "cores.")
+            the_pool = multiprocessing.Pool(multiprocessing.cpu_count()-1, writeTar,(the_queue,))
+            #jobs = []
             for i in range(number_of_shards):
-                jobs.append(Process(target=writeTar, args=(
-                    shard_name_list[i], dataset_dict_splits[i])))
-            for j in jobs:
-                j.start()
-            for j in jobs:
-                j.join()
+                the_queue.put((shard_name_list[i], dataset_dict_splits[i]))
+            for i in range(multiprocessing.cpu_count()-1):
+                the_queue.put((None, None))
+                #jobs.append(Process(target=writeTar, args=(
+                #    shard_name_list[i], dataset_dict_splits[i])))
+            #for j in jobs:
+            #    j.start()
+            #for j in jobs:
+            #    j.join()
+            # prevent adding anything more to the queue and wait for queue to empty
+            the_queue.close()
+            the_queue.join_thread()
 
+            # prevent adding anything more to the process pool and wait for all processes to finish
+            the_pool.close()
+            the_pool.join()
             print("Completed tar generation")
             #Parallel(n_jobs=number_of_shards)(delayed(writeTar)(shard_name_list[i], dataset_dict_splits[i]) for i in range(number_of_shards))
         else:
@@ -295,13 +321,16 @@ class create_DataSet:
             if i % 100 == 0:
                 print("Dataset Creation Progress")
                 progress_complete = True
+                total_duration = 0
                 for k in self.duration_dict_progress:
                     progress = self.duration_dict_progress[k] / \
                         self.duration_dict_limit[k] * 100
+                    total_duration += self.duration_dict_progress[k]
                     print(k, progress)
                     progress_complete *= progress > 100
                 if progress_complete:
                     logger.info(f"Finished compiling dataset from {i} events.")
+                    logger.info(f"Total duration in the dataset is {total_duration/3600000} hours.")
                     break
 
         return progress_complete
@@ -354,13 +383,13 @@ def prepare_bizspeech_speechbrain(hparams: dict):
         if hparams["use_wds"]:
             logger.info("Starting to create tars compatible for webdataset")
             datasetObj.json_to_webdataset_tar(
-                "train", hparams["local_dataset_folder"], hparams["number_of_shards"], hparams["preprocess_audio"])
+                "train", hparams["local_dataset_folder"], hparams["number_of_shards"], hparams["use_compression"], hparams["preprocess_audio"])
             logger.info("Train tar shards written out!")
             datasetObj.json_to_webdataset_tar(
-                "val", hparams["local_dataset_folder"], hparams["number_of_shards"], hparams["preprocess_audio"])
+                "val", hparams["local_dataset_folder"], hparams["number_of_shards"], hparams["use_compression"], hparams["preprocess_audio"])
             logger.info("Validation tar shards written out!")
             datasetObj.json_to_webdataset_tar(
-                "test", hparams["local_dataset_folder"], hparams["number_of_shards"], hparams["preprocess_audio"])
+                "test", hparams["local_dataset_folder"], hparams["number_of_shards"], hparams["use_compression"], hparams["preprocess_audio"])
             logger.info("Test tar shards written out!")
 
     if hparams["copy_to_local"]:
