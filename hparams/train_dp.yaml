@@ -56,8 +56,8 @@ dynamic_batch_kwargs:  # These are used for the training data.
     min_sample_len: 15999 # 1s * 16000
     max_sample_len: 960000 # 60s * 16000 (Sample rate)
     sampler_kwargs:
-        target_batch_numel: 5760000  # n_GPU *180s * 16000 (Sample rate)
-        max_batch_numel: 7680000 # n_GPU * 240s * 16000 (Sample rate)
+        target_batch_numel: 11520000  # n_GPU *180s * 16000 (Sample rate)
+        max_batch_numel: 15360000 # n_GPU * 240s * 16000 (Sample rate)
 
 
 # Feature parameters

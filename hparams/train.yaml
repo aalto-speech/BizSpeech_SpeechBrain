@@ -1,4 +1,4 @@
-dataset: !include:dataset.yaml
+dataset: !include:dataset_8000.yaml
 tokenizer_params: !include:tokenizer.yaml
 
 train_WER_required: False
@@ -19,6 +19,9 @@ pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
       #model: !ref <model>
    paths:
       tokenizer: !ref <dataset[save_folder]>/<tokenizer_params[token_output]>_<tokenizer_params[token_type]>.model
+
+gradient_accumulation: False
+subbatches_count_for_grad_acc: 4
 
 
 # The train logger writes training statistics to a file, as well as stdout.
@@ -41,23 +44,23 @@ label_smoothing: 0.1
 # Dataloader options
 train_dataloader_opts:    
     batch_size: null
-    num_workers: !ref <batch_size>
+    num_workers: 8
 valid_dataloader_opts:
     batch_size: null
-    num_workers: !ref <batch_size>
+    num_workers: 1
 test_dataloader_opts:
     batch_size: null
-    num_workers: !ref <batch_size>
+    num_workers: 1
 
 use_dynamic_batch_size: True
-looped_nominal_epoch: 3000
+looped_nominal_epoch: 20000
 dynamic_batch_kwargs:  # These are used for the training data.
     len_key: "sig"
     min_sample_len: 15999 # 1s * 16000
     max_sample_len: 960000 # 60s * 16000 (Sample rate)
     sampler_kwargs:
-        target_batch_numel: 5760000  # n_GPU *180s * 16000 (Sample rate)
-        max_batch_numel: 7680000 # n_GPU * 240s * 16000 (Sample rate)
+        target_batch_numel: 720000  # 180s * 16000 (Sample rate)
+        max_batch_numel: 960000 # 240s * 16000 (Sample rate)
 
 
 # Feature parameters

@@ -1,5 +1,5 @@
 # Seed needs to be set at top of yaml, before objects with parameters are instantiated
-seed: 98580
+seed: 98589 
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
 dataset_seed: 8000
 
