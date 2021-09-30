@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=98564_biz
-#SBATCH -c 4
-#SBATCH --time=50:00:00
+#SBATCH --job-name=98567_biz
+#SBATCH -c 6
+#SBATCH --time=100:00:00
 #SBATCH --gres=gpu:1
-#SBATCH --mem-per-cpu=20GB
+#SBATCH --mem-per-cpu=12GB
 #SBATCH -p gpu-nvlink
 
 ## Set monitoring interval ##
@@ -33,8 +33,6 @@ stop_monitoring() {
 }
 trap stop_monitoring EXIT
 
-
 module load cuda
 python tokenizer_train.py hparams/tokenizer.yaml
 python train.py hparams/train.yaml
-# srun --job-name=bizspeech_train -p dgx-spa -c 16 --time=10:00:00 --gres=gpu:v100:1 --mem-per-cpu=16GB

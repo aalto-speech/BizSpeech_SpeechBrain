@@ -22,7 +22,7 @@ import webdataset as wds
 from hyperpyyaml import load_hyperpyyaml
 from tqdm import tqdm
 
-from bizspeech_prepare import prepare_bizspeech_speechbrain
+from data_prepare.bizspeech_prepare import prepare_bizspeech_speechbrain
 
 logger = logging.getLogger(__name__)
 

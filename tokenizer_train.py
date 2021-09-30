@@ -11,7 +11,7 @@ import sys
 import logging
 import speechbrain as sb
 from hyperpyyaml import load_hyperpyyaml
-from bizspeech_prepare import prepare_bizspeech_speechbrain
+from data_prepare.bizspeech_prepare import prepare_bizspeech_speechbrain
 
 
 logger = logging.getLogger(__name__)

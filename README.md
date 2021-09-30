@@ -1,46 +1,54 @@
-Git Repository for using speechbrain on the Bizspeech data
+# **<center>Speechbrain with Bizspeech data for distributed training.</center>**
 
-# Data Prep
+## **<center>Repo for the [Masters Thesis](https://github.com/anandcu3/verbose-eureka)</center>**
 
-- [X]  Start with a small set
+This is the repository for distributed training using SpeechBrain with BizSpeech dataset.
 
-    What's "small"?
+### **Project Files Description**
+This Project includes the following files:
 
-    Choose (20 hours * 2) for development and test sets.  == 80 Hours
+#### **Executable Files**
 
-    Pick from test set 1 and 2 (so we have approximate known WER) for these
+- **train.py** - Starting point for single GPU and Synchronous (DDP) training. Uses the functions from `data_prepare` folder to load the datasets and configuration files in `hparams` folder.
 
-- [X]  Choosing Data Distribution
+- **train_hogwild.py** - Starting point for Asynchronous (Hogwild!) training. Uses the functions from `data_prepare` folder to load the datasets and configuration files in `hparams` folder. Doesnt use SpeechBrain `Brain` class but uses the modified version of the methods from the class to enable shared memory training. 
 
-    Effectively 4 sets of 20 hours each.
+- **tokenizer_train.py** - Script to train the tokenizer using SentencePiece Tokenizer.
 
-    Each one will have
+#### **Other Files**
 
-    10 hours of native speakers and 10 hours of non native speaker
+- **conda_env.yaml**
 
-    5 hours of presentation and 5 hours of qna for each of these 10 hours
+- **Experiments.xlsx**
 
-- [x]  Data Preprocessing (to use for training)
+#### **Triton SBatch Scripts**
 
-    Try to choose data without noise. Add exlusion list from Google Azure results which have very high WER (>100%)
+- **triton_train_ddp_gpu.sh** - Sbatch script to request multiple GPUs and CPUs to train using DDP. This script monitors the GPU usage and dumps the logs to `slurm-${SLURM_JOB_ID}.out` when running on non-DGX machines. The logging doesnt work on DGX machines due to a dependency issue. Uses the tool `gpustat` for monitoring GPU and is part of the `conda_env.yaml`.
 
-    Split to reasonably short utterances (~ 1 sentence each). Important for attention models.
+- **triton_train_ddp.sh** - Sbatch script to request multiple GPUs and CPUs to train using DDP. This is for DGX machine without any monitoring.
 
-- [x]  Speechbrain Compatible Data Loading
+- **triton_train_gpu.sh** - Sbatch script to request single GPU to train. This script monitors the GPU usage and dumps the logs to `slurm-${SLURM_JOB_ID}.out` when running on non-DGX machines. The logging doesnt work on DGX machines due to a dependency issue. Uses the tool `gpustat` for monitoring GPU and is part of the `conda_env.yaml`.
 
-    Newest method uses JSON
+- **triton_train_hogwild.sh** - Sbatch script to request single GPU to train using Hogwild. Requests more CPUs than general single GPU script.
 
-    Look at recipies from TIMIT and WS5 for reference on speechbrain repo github
+- **triton_train.sh** - Sbatch script to request single GPU to train. This is for DGX machine without any monitoring.
 
-# DL Phase
+### **`data_prepare` Folder Description**
 
-- [ ]  Attention based Encoder - Decoder model to start off
+- **bizspeech_prepare.py** - 
 
-    CRDNN Model? CTC?
+- **librispeech.py** - 
 
-- [ ]  Hyperparameter settings from TIMIT recipies
-- [ ]  Transformer models later?
+- **spgispeech.py** - 
 
-    They are very sensitive to hyperparameters
+### **`hparams` Folder Description**
 
-    Maybe also use pretrained model?
+- **dataset\*.yaml** - 
+
+- **tokenizer.yaml** - 
+
+- **train_ddp.yaml** - 
+
+- **train.yaml** - 
+
+- **train_hogwild.yaml** - 

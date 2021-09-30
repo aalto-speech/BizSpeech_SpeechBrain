@@ -8,5 +8,5 @@
 #SBATCH --mem-per-cpu=16GB
 
 module load cuda
-#python tokenizer_train.py hparams/tokenizer.yaml
+python tokenizer_train.py hparams/tokenizer.yaml
 python -m torch.distributed.launch --nproc_per_node=4 train.py hparams/train_ddp.yaml --distributed_launch --distributed_backend='nccl'

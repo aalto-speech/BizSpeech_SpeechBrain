@@ -21,9 +21,9 @@ import torchaudio
 import webdataset as wds
 from hyperpyyaml import load_hyperpyyaml
 
-from bizspeech_prepare import prepare_bizspeech_speechbrain
-from spgispeech import dataio_prepare_spgi
-from train_librispeech import dataio_prepare_libri
+from data_prepare.bizspeech_prepare import prepare_bizspeech_speechbrain
+from data_prepare.spgispeech import dataio_prepare_spgi
+from data_prepare.librispeech import dataio_prepare_libri
 
 logger = logging.getLogger(__name__)
 
