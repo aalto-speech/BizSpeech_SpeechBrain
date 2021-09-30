@@ -8,6 +8,7 @@ Authors
 import json
 import logging
 import pathlib
+import string
 import sys
 import time
 from logging.handlers import QueueHandler, QueueListener
@@ -133,7 +134,7 @@ def update_average(step, loss, avg_loss):
     return avg_loss
 
 
-def compute_objectives(predictions, batch, stage, hparams, epoch_counter, ctc_cost, tokenizer=None, wer_metric=None, cer_metric=None):
+def compute_objectives(predictions, batch, stage, hparams, epoch_counter, ctc_cost, tokenizer=None, wer_metric=None, cer_metric=None, wer_metric_p=None):
     """Compute the loss (CTC+NLL) given predictions and targets."""
     current_epoch = epoch_counter.current
 
@@ -170,12 +171,19 @@ def compute_objectives(predictions, batch, stage, hparams, epoch_counter, ctc_co
         loss = loss_seq
 
     if stage != sb.Stage.TRAIN:
-        predicted_words = [
+        table = str.maketrans('','',string.punctuation)
+        predicted_words_p = [
             tokenizer.decode_ids(utt_seq).split(" ")
             for utt_seq in predicted_tokens
         ]
-        target_words = [wrd.split(" ") for wrd in batch.words]
+        target_words_p = [wrd.split(" ") for wrd in batch.words]
+        predicted_words = [
+                [a.upper().translate(table) for a in tokenizer.decode_ids(utt_seq).split(" ")]
+                for utt_seq in predicted_tokens
+            ]
+        target_words = [[a.upper().translate(table) for a in wrd.split(" ")] for wrd in batch.words]
         wer_metric.append(ids, predicted_words, target_words)
+        wer_metric_p.append(ids, predicted_words_p, target_words_p)
         cer_metric.append(ids, predicted_words, target_words)
 
     return loss
@@ -304,7 +312,54 @@ def fit(hparams, modules, epoch_counter, checkpointer, run_opts, sync_flags, ran
         
         while sync_flags["validation_flag"]:
             time.sleep(10)
-            
+
+def eval(hparams, modules, epoch_counter, checkpointer, run_opts, sync_flags, rank, train_loss_sync, tb_logger, logger, test_set):
+    device = run_opts["device"]
+    #modules = torch.nn.ModuleDict(hparams["modules"]).to(device)
+    compute_features = hparams["compute_features"]
+    log_softmax = hparams["log_softmax"]
+    ctc_lin = hparams["ctc_lin"]
+    valid_search = hparams["valid_search"]
+    test_search = hparams["test_search"]
+    tokenizer = hparams["tokenizer"]
+    ctc_cost = hparams["ctc_cost"]
+    avg_train_loss = 0.0
+
+    wer_metric = hparams["error_rate_computer"]()
+    wer_metric_p = hparams["error_rate_computer"]()
+    cer_metric = hparams["cer_computer"]()
+    modules.eval()
+    avg_valid_loss = 0.0
+    step = 0
+    with torch.no_grad():
+        with tqdm(test_set) as t:
+            for batch in t:
+                step += 1
+                predictions = compute_forward(batch, sb.Stage.VALID, device, hparams, modules,
+                                            compute_features, epoch_counter, log_softmax, ctc_lin, valid_search, test_search)
+                with torch.no_grad():
+                    loss = compute_objectives(
+                        predictions, batch, sb.Stage.VALID, hparams, epoch_counter, ctc_cost, tokenizer, wer_metric, cer_metric, wer_metric_p)
+
+                loss = loss.detach()
+                avg_valid_loss = update_average(step, loss, avg_valid_loss)
+                t.set_postfix(train_loss=avg_train_loss)
+    step = 0
+    stage_stats = {"loss": avg_valid_loss}
+    stage_stats["WER"] = wer_metric.summarize("error_rate")
+    stage_stats["WER_p"] = wer_metric_p.summarize("error_rate")
+    stage_stats["CER"] = cer_metric.summarize("error_rate")
+
+
+    hparams["train_logger"].log_stats(
+        stats_meta={"epoch": 1},
+        test_stats=stage_stats,
+    )
+
+    checkpointer.save_and_keep_only(
+        meta={"WER": stage_stats["WER"]}, min_keys=["WER"],
+    )
+    
 
 
 def train(rank, run_opts, hparams, modules, sync_flags, train_loss_sync, log_q):
@@ -347,6 +402,20 @@ def train(rank, run_opts, hparams, modules, sync_flags, train_loss_sync, log_q):
         datasets["train"],
         datasets["val"]
     )
+
+    eval(    
+        hparams,
+        modules,
+        epoch_counter,
+        checkpointer,
+        run_opts,
+        sync_flags,
+        rank,
+        train_loss_sync,
+        tb_logger,
+        logger,
+        datasets["test"]
+        )
 
 def logger_init():
     q = mp.Queue()
@@ -414,9 +483,3 @@ if __name__ == "__main__":
     for p in processes:
         p.join()
 
-    # Load best checkpoint (highest STOI) for evaluation
-    # test_stats = asr_brain.evaluate(
-    #    test_set=datasets["test"],
-    #    min_key="WER",
-    #    test_loader_kwargs=hparams["test_dataloader_opts"],
-    # )

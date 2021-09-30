@@ -1,7 +1,7 @@
 # Seed needs to be set at top of yaml, before objects with parameters are instantiated
-seed: 98588
+seed: 98591
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
-dataset_seed: 8000
+dataset_seed: 801010
 
 output_folder: !ref runs/<seed>
 save_folder: !ref <output_folder>/save
@@ -17,9 +17,9 @@ use_wds: True
 number_of_shards: 2500
 shardfiles_pattern: !ref <local_dataset_folder>/bizspeech_shard-%06d.tar.gz
 use_compression: True
-train_shards: (0, 2492)
-val_shards: (2492, 2496)
-test_shards: (2496, 2500)
+train_shards: (0, 18)
+val_shards: (3000, 3004)
+test_shards: (3004, 3008)
 #shard_maxcount: 10000
 
 # Scratch or local Storage

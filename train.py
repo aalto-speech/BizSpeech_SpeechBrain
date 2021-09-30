@@ -7,10 +7,14 @@ Authors
 
 import json
 import logging
+import os
 import pathlib
 import shutil
+import string
 import sys
+import traceback
 
+import numpy as np
 import speechbrain as sb
 import torch
 import torchaudio
@@ -18,6 +22,8 @@ import webdataset as wds
 from hyperpyyaml import load_hyperpyyaml
 
 from bizspeech_prepare import prepare_bizspeech_speechbrain
+from spgispeech import dataio_prepare_spgi
+from train_librispeech import dataio_prepare_libri
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +52,7 @@ class ASR(sb.Brain):
         """
         batch = batch.to(self.device)
         wavs, wav_lens = batch.sig
+
         tokens_bos, _ = batch.tokens_bos
         wavs, wav_lens = wavs.to(self.device), wav_lens.to(self.device)
 
@@ -100,6 +107,7 @@ class ASR(sb.Brain):
     def compute_objectives(self, predictions, batch, stage):
         """Compute the loss (CTC+NLL) given predictions and targets."""
         current_epoch = self.hparams.epoch_counter.current
+
         if stage == sb.Stage.TRAIN:
             if current_epoch <= self.hparams.number_of_ctc_epochs:
                 if self.hparams.train_WER_required:
@@ -157,13 +165,29 @@ class ASR(sb.Brain):
             target_words = [wrd.split(" ") for wrd in batch.words]
             self.wer_metric.append(ids, predicted_words, target_words)
         if stage != sb.Stage.TRAIN:
-            predicted_words = [
+            table = str.maketrans('', '', string.punctuation)
+            predicted_words_p = [
                 self.hparams.tokenizer.decode_ids(utt_seq).split(" ")
                 for utt_seq in predicted_tokens
             ]
-            target_words = [wrd.split(" ") for wrd in batch.words]
+            predicted_words = [
+                [a.upper().translate(table)
+                 for a in self.hparams.tokenizer.decode_ids(utt_seq).split(" ")]
+                for utt_seq in predicted_tokens
+            ]
+            target_words_p = [wrd.split(" ") for wrd in batch.words]
+            target_words = [[a.upper().translate(table)
+                             for a in wrd.split(" ")] for wrd in batch.words]
+            self.wer_metric_p.append(ids, predicted_words_p, target_words_p)
             self.wer_metric.append(ids, predicted_words, target_words)
             self.cer_metric.append(ids, predicted_words, target_words)
+            if stage == sb.Stage.TEST and self.hparams.require_native_wer:
+                if "non" in batch.category[0]:
+                    self.wer_metric_nonnative.append(
+                        ids, predicted_words, target_words)
+                else:
+                    self.wer_metric_native.append(
+                        ids, predicted_words, target_words)
 
         return loss
 
@@ -171,10 +195,13 @@ class ASR(sb.Brain):
         """Train the parameters given a single batch in input."""
         predictions = self.compute_forward(batch, sb.Stage.TRAIN)
         loss = self.compute_objectives(predictions, batch, sb.Stage.TRAIN)
+        # if self.hparams.gradient_accumulation:
+        #    loss /= self.hparams.subbatches_count_for_grad_acc
         loss.backward()
-        if self.check_gradients(loss):
+        if not self.hparams.gradient_accumulation or (self.hparams.gradient_accumulation and self.step % self.hparams.subbatches_count_for_grad_acc == 0):
             self.optimizer.step()
-        self.optimizer.zero_grad()
+            self.optimizer.zero_grad()
+
         return loss.detach()
 
     def evaluate_batch(self, batch, stage):
@@ -190,7 +217,11 @@ class ASR(sb.Brain):
             self.wer_metric = self.hparams.error_rate_computer()
         if stage != sb.Stage.TRAIN:
             self.wer_metric = self.hparams.error_rate_computer()
+            self.wer_metric_p = self.hparams.error_rate_computer()
             self.cer_metric = self.hparams.cer_computer()
+        if stage == sb.Stage.TEST and self.hparams.require_native_wer:
+            self.wer_metric_native = self.hparams.error_rate_computer()
+            self.wer_metric_nonnative = self.hparams.error_rate_computer()
 
     def on_stage_end(self, stage, stage_loss, epoch):
         """Run at the end of a epoch."""
@@ -202,8 +233,13 @@ class ASR(sb.Brain):
                 stage_stats["WER"] = self.wer_metric.summarize("error_rate")
         else:
             stage_stats["WER"] = self.wer_metric.summarize("error_rate")
+            stage_stats["WER_p"] = self.wer_metric_p.summarize("error_rate")
             stage_stats["CER"] = self.cer_metric.summarize("error_rate")
-
+            if stage == sb.Stage.TEST and self.hparams.require_native_wer:
+                stage_stats["WER_native"] = self.wer_metric_native.summarize(
+                    "error_rate")
+                stage_stats["WER_nonnative"] = self.wer_metric_nonnative.summarize(
+                    "error_rate")
         # Perform end-of-iteration things, like annealing, logging, etc.
         if stage == sb.Stage.VALID:
             old_lr, new_lr = self.hparams.lr_annealing(stage_stats["WER"])
@@ -236,6 +272,13 @@ class ASR(sb.Brain):
                 )
             with open(self.hparams.wer_file, "w") as w:
                 self.wer_metric.write_stats(w)
+            with open(self.hparams.wer_file_p, "w") as w:
+                self.wer_metric_p.write_stats(w)
+            if self.hparams.require_native_wer:
+                with open(self.hparams.wer_native_file, "w") as w:
+                    self.wer_metric_native.write_stats(w)
+                with open(self.hparams.wer_nonnative_file, "w") as w:
+                    self.wer_metric_nonnative.write_stats(w)
 
 
 def dataio_prepare(hparams):
@@ -275,7 +318,6 @@ def dataio_prepare(hparams):
     @sb.utils.data_pipeline.provides("sig")
     def audio_pipeline(audio, start, end):
         """Load the audio signal. This is done on the CPU in the `collate_fn`."""
-        # effects = []
         if hparams["copy_to_local"]:
             event_id = str(pathlib.Path(audio).resolve().parent).split("/")[-1]
             dest_dir = pathlib.Path(
@@ -299,7 +341,7 @@ def dataio_prepare(hparams):
             start = int(time_str_to_seconds(start) * metadata.sample_rate)
             end = int(time_str_to_seconds(end) * metadata.sample_rate)
         num_frames = end - start
-        
+
         audio, fs = torchaudio.load(
             audio, num_frames=num_frames, frame_offset=start)
         # a = time.time()
@@ -393,6 +435,7 @@ def dataio_prepare_wds(hparams: dict):
 
         return {
             "id": sample_dict["id"],
+            "category": sample_dict["meta"]["category"],
             "sig": sample_dict["audio_tensor"],
             "words": txt,
             "tokens_list": tokens_list,
@@ -416,25 +459,27 @@ def dataio_prepare_wds(hparams: dict):
             if hparams["use_dynamic_batch_size"]:
                 datasets[dataset] = (
                     wds.WebDataset(
-                    [shards_pattern % a for a in range(hparams["dataset"][dataset+"_shards"][0], hparams["dataset"][dataset+"_shards"][1])],
-                    length=length_of_set)
+                        [shards_pattern % a for a in range(
+                            hparams["dataset"][dataset+"_shards"][0], hparams["dataset"][dataset+"_shards"][1])],
+                        length=length_of_set)
                     .decode()
                     .rename(id="__key__", audio_tensor="wav.pyd", meta="meta.json")
                     .map(data_pipeline)
                     .then(
                         sb.dataio.iterators.dynamic_bucketed_batch,
                         **hparams["dynamic_batch_kwargs"],
-                        #wds.iterators.batched,
-                        #batchsize=hparams["batch_size"],
-                        #collation_fn=sb.dataio.batch.PaddedBatch,
-                        #partial=True
+                        # wds.iterators.batched,
+                        # batchsize=hparams["batch_size"],
+                        # collation_fn=sb.dataio.batch.PaddedBatch,
+                        # partial=True
                     )
                 )
             else:
                 datasets[dataset] = (
                     wds.WebDataset(
-                    [shards_pattern % a for a in range(hparams["dataset"][dataset+"_shards"][0], hparams["dataset"][dataset+"_shards"][1])],
-                    length=length_of_set)
+                        [shards_pattern % a for a in range(
+                            hparams["dataset"][dataset+"_shards"][0], hparams["dataset"][dataset+"_shards"][1])],
+                        length=length_of_set)
                     .decode()
                     .rename(id="__key__", audio_tensor="wav.pyd", meta="meta.json")
                     .map(data_pipeline)
@@ -444,12 +489,13 @@ def dataio_prepare_wds(hparams: dict):
                         collation_fn=sb.dataio.batch.PaddedBatch,
                         partial=True
                     )
-                )   
+                )
         else:
             datasets[dataset] = (
                 wds.WebDataset(
-                [shards_pattern % a for a in range(hparams["dataset"][dataset+"_shards"][0], hparams["dataset"][dataset+"_shards"][1])],
-                length=length_of_set)
+                    [shards_pattern % a for a in range(
+                        hparams["dataset"][dataset+"_shards"][0], hparams["dataset"][dataset+"_shards"][1])],
+                    length=174)
                 .decode()
                 .rename(id="__key__", audio_tensor="wav.pyd", meta="meta.json")
                 .map(data_pipeline)
@@ -465,6 +511,10 @@ def dataio_prepare_wds(hparams: dict):
     return datasets, train_shard_count
 
 
+def worker_init(worker_id):
+    np.random.seed(np.random.get_state()[1][0] + worker_id)
+
+
 if __name__ == "__main__":
 
     # Reading command line arguments
@@ -477,28 +527,33 @@ if __name__ == "__main__":
     with open(hparams_file) as fin:
         hparams = load_hyperpyyaml(fin, overrides)
 
-    # Create experiment directory
-    sb.create_experiment_directory(
-        experiment_directory=hparams["dataset"]["output_folder"],
-        hyperparams_to_save=hparams_file,
-        overrides=overrides,
-    )
-
-    # Data preparation, to be run on only one process.
-    sb.utils.distributed.run_on_main(
-        prepare_bizspeech_speechbrain,
-        kwargs={
-            "hparams": hparams["dataset"]
-        })
-
-    # We can now directly create the datasets for training, val, and test
-    if hparams["dataset"]["use_wds"]:
-        datasets, train_shard_count = dataio_prepare_wds(hparams)
-        hparams["train_dataloader_opts"]["num_workers"] = 20
-        hparams["valid_dataloader_opts"]["num_workers"] = 1
-        hparams["test_dataloader_opts"]["num_workers"] = 1
+    if hparams["other_datasets"]["test_on_otherdatasets"] == "libri":
+        test_datasets = dataio_prepare_libri(
+            hparams["other_datasets"]["libri"])
+    elif hparams["other_datasets"]["test_on_otherdatasets"] == "spgi":
+        test_datasets = dataio_prepare_spgi(
+            hparams["other_datasets"]["spgi"])
     else:
-        datasets = dataio_prepare(hparams)
+        # Create experiment directory
+        sb.create_experiment_directory(
+            experiment_directory=hparams["dataset"]["output_folder"],
+            hyperparams_to_save=hparams_file,
+            overrides=overrides,
+        )
+
+        # Data preparation, to be run on only one process.
+        sb.utils.distributed.run_on_main(
+            prepare_bizspeech_speechbrain,
+            kwargs={
+                "hparams": hparams["dataset"]
+            })
+
+        # We can now directly create the datasets for training, val, and test
+        if hparams["dataset"]["use_wds"]:
+            datasets, train_shard_count = dataio_prepare_wds(hparams)
+        else:
+            datasets = dataio_prepare(hparams)
+
     sb.utils.distributed.run_on_main(hparams["pretrainer"].collect_files)
     hparams["pretrainer"].load_collected(device=run_opts["device"])
 
@@ -511,27 +566,45 @@ if __name__ == "__main__":
         checkpointer=hparams["checkpointer"],
     )
 
-    if hparams["use_dynamic_batch_size"]:
-        hparams["train_dataloader_opts"]["looped_nominal_epoch"] = hparams["looped_nominal_epoch"]
-        datasets["train"] = asr_brain.make_dataloader(
-            datasets["train"], sb.Stage.TRAIN, **hparams["train_dataloader_opts"]
-        )
-        asr_brain.train_loader = datasets["train"]
     # The `fit()` method iterates the training loop, calling the methods
     # necessary to update the parameters of the model. Since all objects
     # with changing state are managed by the Checkpointer, training can be
     # stopped at any point, and will be resumed on next call.
-    asr_brain.fit(
-        asr_brain.hparams.epoch_counter,
-        datasets["train"],
-        datasets["val"],
-        train_loader_kwargs=hparams["train_dataloader_opts"],
-        valid_loader_kwargs=hparams["valid_dataloader_opts"],
-    )
+    if hparams["other_datasets"]["test_on_otherdatasets"] == "none":
+        hparams["train_dataloader_opts"]["worker_init_fn"] = worker_init
+        if hparams["use_dynamic_batch_size"]:
+            hparams["train_dataloader_opts"]["looped_nominal_epoch"] = hparams["looped_nominal_epoch"]
+            datasets["train"] = asr_brain.make_dataloader(
+                datasets["train"], sb.Stage.TRAIN, **hparams["train_dataloader_opts"]
+            )
+            asr_brain.train_loader = datasets["train"]
 
-    # Load best checkpoint (highest STOI) for evaluation
-    test_stats = asr_brain.evaluate(
-        test_set=datasets["test"],
-        min_key="WER",
-        test_loader_kwargs=hparams["test_dataloader_opts"],
-    )
+        try:
+            asr_brain.fit(
+                asr_brain.hparams.epoch_counter,
+                datasets["train"],
+                datasets["val"],
+                train_loader_kwargs=hparams["train_dataloader_opts"],
+                valid_loader_kwargs=hparams["valid_dataloader_opts"],
+            )
+        except Exception as e:
+            with open("debugging_info" + run_opts["device"] + ".txt", "a") as f:
+                f.write(str(e))
+                traceback.print_exc(file=f)
+
+        # Load best checkpoint (highest STOI) for evaluation
+        test_stats = asr_brain.evaluate(
+            test_set=datasets["test"],
+            min_key="WER",
+            test_loader_kwargs=hparams["test_dataloader_opts"],
+        )
+    else:
+        print("here")
+        for k in test_datasets.keys():  # keys are test_clean, test_other etc
+            print(k, test_datasets[k])
+            asr_brain.hparams.wer_file = os.path.join(
+                hparams["dataset"]["output_folder"], "wer_{}.txt".format(k)
+            )
+            asr_brain.evaluate(
+                test_datasets[k], test_loader_kwargs=hparams["other_datasets"]["test_dataloader_opts"]
+            )

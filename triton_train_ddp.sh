@@ -2,7 +2,7 @@
 #SBATCH --job-name=biz_ddp
 #SBATCH -p dgx-spa
 #SBATCH --account dgx-spa
-#SBATCH -c 4
+#SBATCH -c 8
 #SBATCH --time=100:00:00
 #SBATCH --gres=gpu:4
 #SBATCH --mem-per-cpu=16GB

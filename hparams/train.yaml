@@ -1,8 +1,9 @@
-dataset: !include:dataset_8000.yaml
+dataset: !include:dataset.yaml
 tokenizer_params: !include:tokenizer.yaml
 
 train_WER_required: False
 wer_file: !ref <dataset[output_folder]>/wer.txt
+wer_file_p: !ref <dataset[output_folder]>/wer_p.txt
 train_log: !ref <dataset[output_folder]>/train_log.txt
 tensorboard_dir: !ref runs/tensorboard_log/<dataset[seed]>
 
@@ -22,7 +23,30 @@ pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
 
 gradient_accumulation: False
 subbatches_count_for_grad_acc: 4
+require_native_wer: False
+wer_native_file: !ref <dataset[output_folder]>/wer_native.txt
+wer_nonnative_file: !ref <dataset[output_folder]>/wer_nonnative.txt
 
+other_datasets:
+    test_on_otherdatasets: "spgi" # options are "libri" "spgi" or "none"
+    test_dataloader_opts:
+        batch_size: 8
+        num_workers: 1
+    libri:
+        data_folder: librispeech
+        test_csv:
+            - !ref <other_datasets[libri[data_folder]]>/test-clean.csv
+            - !ref <other_datasets[libri[data_folder]]>/test-other.csv
+        tokenizer: !ref <tokenizer>
+        bos_index: 0
+        eos_index: 0
+    spgi:
+        data_folder: spgispeech/val/
+        test_csv: !ref spgispeech/val.csv
+        tokenizer: !ref <tokenizer>
+        bos_index: 0
+        eos_index: 0
+    
 
 # The train logger writes training statistics to a file, as well as stdout.
 train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
@@ -33,7 +57,7 @@ tensorboard_logger: !new:speechbrain.utils.train_logger.TensorboardLogger
     save_dir: !ref <tensorboard_dir>
 
 # Training parameters
-number_of_epochs: 200
+number_of_epochs: 50
 number_of_ctc_epochs: 15
 batch_size: 8
 lr: 0.0001
@@ -53,14 +77,14 @@ test_dataloader_opts:
     num_workers: 1
 
 use_dynamic_batch_size: True
-looped_nominal_epoch: 20000
+looped_nominal_epoch: 5000
 dynamic_batch_kwargs:  # These are used for the training data.
     len_key: "sig"
     min_sample_len: 15999 # 1s * 16000
     max_sample_len: 960000 # 60s * 16000 (Sample rate)
     sampler_kwargs:
-        target_batch_numel: 720000  # 180s * 16000 (Sample rate)
-        max_batch_numel: 960000 # 240s * 16000 (Sample rate)
+        target_batch_numel: 2880000  # 180s * 16000 (Sample rate)
+        max_batch_numel: 3840000 # 240s * 16000 (Sample rate)
 
 
 # Feature parameters
